@@ -132,6 +132,10 @@ void dispense(int doseSize) {
 
   stopMotor();
   Serial.println("Alimentacao concluida!");
+
+  // Verifica e envia nivel de comida apos alimentacao
+  delay(500); // Espera comida assentar
+  sendStatus();
 }
 
 // ==================== SENSOR ====================
@@ -205,6 +209,49 @@ void registerDevice() {
   }
 
   http.end();
+}
+
+// Envia status (nivel de comida) para o servidor
+void sendStatus() {
+  if (!wifiConnected || deviceId.length() == 0) return;
+
+  float foodLevel = readFoodLevel();
+  if (foodLevel < 0) foodLevel = 0;
+
+  // Distancia em cm (para debug)
+  digitalWrite(TRIG_PIN, LOW);
+  delayMicroseconds(2);
+  digitalWrite(TRIG_PIN, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(TRIG_PIN, LOW);
+  long duration = pulseIn(ECHO_PIN, HIGH, 30000);
+  float distance = duration * 0.034 / 2;
+
+  HTTPClient http;
+  String url = serverUrl + "/api/devices/" + deviceId + "/status";
+  http.begin(url);
+  http.addHeader("Content-Type", "application/json");
+  http.setTimeout(10000);
+
+  String json = "{\"food_level\":" + String((int)foodLevel) +
+                ",\"distance_cm\":" + String(distance, 1) +
+                ",\"rssi\":" + String(WiFi.RSSI()) +
+                ",\"ip\":\"" + WiFi.localIP().toString() + "\"}";
+
+  int httpCode = http.POST(json);
+
+  if (httpCode == 200) {
+    Serial.println("Status enviado: " + String((int)foodLevel) + "%");
+  } else {
+    Serial.println("Erro ao enviar status: " + String(httpCode));
+  }
+
+  http.end();
+
+  // Alerta de comida baixa
+  if (foodLevel < 20) {
+    Serial.println("⚠️ ALERTA: Nivel de comida baixo! " + String((int)foodLevel) + "%");
+  }
 }
 
 void clearConfig() {
@@ -604,6 +651,9 @@ void setup() {
       // Registra dispositivo automaticamente na conta do usuario
       registerDevice();
 
+      // Envia nivel de comida inicial
+      sendStatus();
+
       fetchSchedules();
       normalMode();
       return;
@@ -640,6 +690,13 @@ void loop() {
     if (millis() - lastSync > 6UL * 3600000UL) {
       fetchSchedules();
       lastSync = millis();
+    }
+
+    // Envia status a cada 5 minutos
+    static unsigned long lastStatus = 0;
+    if (millis() - lastStatus > 5UL * 60000UL) {
+      sendStatus();
+      lastStatus = millis();
     }
 
     delay(1000);

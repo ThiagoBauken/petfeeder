@@ -955,10 +955,10 @@ app.get('/api/devices/:deviceId/status', authMiddleware, (req, res) => {
   const status = deviceStatus.get(deviceId);
 
   if (!status) {
-    return res.json({ online: false, message: 'Dispositivo nunca conectou' });
+    return res.json({ success: true, data: { online: false, food_level: null, message: 'Dispositivo nunca conectou' } });
   }
 
-  res.json(status);
+  res.json({ success: true, data: status });
 });
 
 // ESP32 busca horários agendados (ROTA PÚBLICA - sem auth)

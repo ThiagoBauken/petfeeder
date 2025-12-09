@@ -10,6 +10,7 @@ let state = {
     schedules: [],
     history: [],
     currentDevice: null,
+    deviceStatus: {}, // { deviceId: { food_level, distance_cm, lastSeen } }
 };
 
 // ===================================
@@ -112,6 +113,7 @@ async function loadDevices() {
             state.devices = result.data;
             renderDevicesList();
             updateDeviceSelects();
+            renderFoodLevels();
         }
     } catch (error) {
         console.error('Error loading devices:', error);
@@ -197,7 +199,10 @@ function connectWebSocket() {
 
     ws.on('device_status', (data) => {
         console.log('Device status update:', data);
-        updateDeviceStatus(data.deviceId, data.status);
+        // Handle both formats: data.deviceId/data.status and data.data
+        const statusData = data.data || data;
+        const deviceId = statusData.device_id || data.deviceId;
+        updateDeviceStatus(deviceId, statusData);
     });
 
     ws.on('feeding', (data) => {
@@ -219,15 +224,134 @@ function connectWebSocket() {
 function updateDeviceStatus(deviceId, status) {
     const device = state.devices.find(d => d.device_id === deviceId);
     if (device) {
-        device.online = status.online;
-        device.last_seen = status.timestamp;
+        device.online = status.online !== false;
+        device.last_seen = status.timestamp || new Date().toISOString();
         renderDevicesList();
+    }
+
+    // Update food level status
+    if (status.food_level !== undefined) {
+        state.deviceStatus[deviceId] = {
+            food_level: status.food_level,
+            distance_cm: status.distance_cm,
+            lastSeen: new Date().toISOString()
+        };
+        renderFoodLevels();
+        checkLowFoodAlert();
     }
 }
 
 // ===================================
 // RENDERING
 // ===================================
+
+// Render food levels for all devices
+function renderFoodLevels() {
+    const container = document.getElementById('foodLevelContainer');
+    if (!container) return;
+
+    if (!state.devices || state.devices.length === 0) {
+        container.innerHTML = `
+            <div class="no-devices-msg">
+                <i class="fas fa-microchip"></i>
+                <p>Nenhum dispositivo vinculado.</p>
+                <p><small>Configure seu ESP32 na aba Dispositivos.</small></p>
+            </div>
+        `;
+        return;
+    }
+
+    container.innerHTML = state.devices.map(device => {
+        const status = state.deviceStatus[device.device_id] || {};
+        const level = status.food_level !== undefined ? status.food_level : null;
+        const levelClass = level === null ? '' : level > 50 ? 'level-high' : level > 20 ? 'level-medium' : 'level-low';
+        const levelText = level !== null ? `${level}%` : 'Aguardando...';
+        const lastSeen = status.lastSeen ? formatTimeAgo(status.lastSeen) : 'Nunca';
+
+        return `
+            <div class="food-level-item">
+                <div class="food-level-header">
+                    <div class="device-name">
+                        <i class="fas fa-microchip" style="color: ${device.status === 'online' ? '#28a745' : '#dc3545'}"></i>
+                        ${device.name || device.device_id}
+                    </div>
+                    <div class="level-value" style="color: ${level === null ? '#999' : level > 50 ? '#28a745' : level > 20 ? '#fd7e14' : '#dc3545'}">
+                        ${levelText}
+                    </div>
+                </div>
+                <div class="food-level-bar">
+                    <div class="food-level-fill ${levelClass}" style="width: ${level !== null ? level : 0}%">
+                        ${level !== null && level > 15 ? `<span class="food-level-text">${level}%</span>` : ''}
+                    </div>
+                </div>
+                <div class="food-level-info">
+                    <span><i class="fas fa-clock"></i> Atualizado: ${lastSeen}</span>
+                    <span><i class="fas fa-wifi"></i> ${device.status === 'online' ? 'Online' : 'Offline'}</span>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+// Refresh food levels by requesting from server
+async function refreshFoodLevels() {
+    showToast('Verificando nível de ração...', 'info');
+
+    // For each device, request the status from server
+    for (const device of state.devices) {
+        try {
+            // The ESP32 sends status every 5 min, but we can fetch the cached status from server
+            const result = await api.request('GET', `/devices/${device.device_id}/status`);
+            if (result.success && result.data) {
+                state.deviceStatus[device.device_id] = {
+                    food_level: result.data.food_level,
+                    distance_cm: result.data.distance_cm,
+                    lastSeen: result.data.lastSeen || new Date().toISOString()
+                };
+            }
+        } catch (error) {
+            console.log('Status not available for', device.device_id);
+        }
+    }
+
+    renderFoodLevels();
+    checkLowFoodAlert();
+    showToast('Níveis atualizados!', 'success');
+}
+
+// Check for low food alert
+function checkLowFoodAlert() {
+    const alertEl = document.getElementById('lowFoodAlert');
+    const msgEl = document.getElementById('lowFoodMessage');
+    if (!alertEl || !msgEl) return;
+
+    const lowDevices = [];
+    for (const device of state.devices) {
+        const status = state.deviceStatus[device.device_id];
+        if (status && status.food_level !== undefined && status.food_level < 20) {
+            lowDevices.push(device.name || device.device_id);
+        }
+    }
+
+    if (lowDevices.length > 0) {
+        msgEl.textContent = `Nível de ração baixo em: ${lowDevices.join(', ')}! Reponha a ração.`;
+        alertEl.style.display = 'flex';
+    } else {
+        alertEl.style.display = 'none';
+    }
+}
+
+// Format time ago
+function formatTimeAgo(dateString) {
+    const date = new Date(dateString);
+    const now = new Date();
+    const diff = Math.floor((now - date) / 1000);
+
+    if (diff < 60) return 'Agora mesmo';
+    if (diff < 3600) return `${Math.floor(diff / 60)} min atrás`;
+    if (diff < 86400) return `${Math.floor(diff / 3600)}h atrás`;
+    return date.toLocaleDateString('pt-BR');
+}
 
 function renderPetCards() {
     const container = document.getElementById('petCards');

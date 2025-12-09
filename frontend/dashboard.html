@@ -59,6 +59,22 @@
         <div id="dashboardTab" class="tab-content active">
             <h2>Dashboard</h2>
 
+            <!-- Alerta de Comida Baixa -->
+            <div id="lowFoodAlert" class="alert alert-warning" style="display: none;">
+                <i class="fas fa-exclamation-triangle"></i>
+                <span id="lowFoodMessage">Nível de ração baixo!</span>
+            </div>
+
+            <!-- Card de Nível de Comida -->
+            <div class="card" id="foodLevelCard">
+                <h3><i class="fas fa-box"></i> Nível de Ração</h3>
+                <div id="foodLevelContainer">
+                    <div class="loading-spinner">
+                        <i class="fas fa-spinner fa-spin"></i> Carregando...
+                    </div>
+                </div>
+            </div>
+
             <!-- Pet Cards -->
             <div class="pet-cards" id="petCards">
                 <div class="loading-spinner">
@@ -73,8 +89,11 @@
                     <button class="btn btn-primary" onclick="showFeedNowModal()">
                         <i class="fas fa-utensils"></i> Alimentar Agora
                     </button>
+                    <button class="btn btn-secondary" onclick="refreshFoodLevels()">
+                        <i class="fas fa-ruler-vertical"></i> Verificar Nível
+                    </button>
                     <button class="btn btn-secondary" onclick="refreshData()">
-                        <i class="fas fa-sync"></i> Atualizar
+                        <i class="fas fa-sync"></i> Atualizar Tudo
                     </button>
                 </div>
             </div>
