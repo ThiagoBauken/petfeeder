@@ -71,12 +71,14 @@ String savedPassword = "";
 String deviceId = "";
 String userEmail = "";
 
-// Gera ID unico baseado no MAC Address
+// Gera ID unico baseado no MAC Address base (nao muda entre AP e STA)
 String getDeviceId() {
-  uint8_t mac[6];
-  WiFi.macAddress(mac);
+  uint64_t chipId = ESP.getEfuseMac(); // MAC gravado de fabrica, sempre igual
   char id[18];
-  sprintf(id, "PF_%02X%02X%02X", mac[3], mac[4], mac[5]);
+  sprintf(id, "PF_%02X%02X%02X",
+    (uint8_t)(chipId >> 24),
+    (uint8_t)(chipId >> 32),
+    (uint8_t)(chipId >> 40));
   return String(id);
 }
 
