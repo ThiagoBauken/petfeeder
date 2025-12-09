@@ -1,40 +1,48 @@
-# PetFeeder SaaS - Backend Dockerfile (SQLite interno)
+# PetFeeder SaaS - Single Container (Backend + Frontend)
 FROM node:18-alpine
 
-# Install build dependencies for native modules (sqlite3)
-RUN apk add --no-cache python3 make g++ dumb-init
-
-# Create non-root user
-RUN addgroup -g 1001 -S nodejs && \
-    adduser -S nodejs -u 1001
+# Install dependencies
+RUN apk add --no-cache python3 make g++ nginx
 
 WORKDIR /app
 
-# Copy package files
+# Copy backend package files
 COPY backend/package*.json ./
 
 # Install dependencies
-RUN npm ci && npm cache clean --force
+RUN npm install --production
 
-# Copy backend source code
+# Copy backend source
 COPY backend/ .
 
-# Create necessary directories
-RUN mkdir -p /app/logs /app/uploads /app/data && \
-    chown -R nodejs:nodejs /app
+# Copy frontend to nginx
+COPY frontend/ /usr/share/nginx/html/
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-    CMD wget --no-verbose --tries=1 --spider http://localhost:3000/health || exit 1
+# Create nginx config for API proxy
+RUN echo 'server { \
+    listen 80; \
+    root /usr/share/nginx/html; \
+    index login.html index.html; \
+    location /health { return 200 "ok"; add_header Content-Type text/plain; } \
+    location / { try_files $uri $uri/ /login.html; } \
+    location /api/ { proxy_pass http://127.0.0.1:3000/api/; proxy_http_version 1.1; proxy_set_header Host $host; } \
+}' > /etc/nginx/http.d/default.conf
 
-# Switch to non-root user
-USER nodejs
+# Create start script
+RUN echo '#!/bin/sh' > /start.sh && \
+    echo 'nginx' >> /start.sh && \
+    echo 'node server-dev.js' >> /start.sh && \
+    chmod +x /start.sh
+
+# Create data directory
+RUN mkdir -p /app/data /app/logs
 
 # Expose port
-EXPOSE 3000
+EXPOSE 80
 
-# Use dumb-init for proper signal handling
-ENTRYPOINT ["dumb-init", "--"]
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
+    CMD wget -q --spider http://localhost/health || exit 1
 
-# Start application (usando server-dev.js com SQLite)
-CMD ["node", "server-dev.js"]
+# Start both services
+CMD ["/bin/sh", "/start.sh"]
