@@ -372,7 +372,7 @@ function renderPetCards() {
     container.innerHTML = state.pets.map(pet => `
         <div class="pet-card">
             <div class="pet-card-header">
-                <div class="pet-avatar">${getpetEmoji(pet.type)}</div>
+                <div class="pet-avatar">${getPetEmoji(pet.type)}</div>
                 <div>
                     <h3>${pet.name}</h3>
                     <p class="pet-type">${getPetTypeLabel(pet.type)}</p>
@@ -1135,6 +1135,11 @@ function showLinkDeviceModal() {
 
     document.getElementById('modalOverlay').classList.add('active');
     document.getElementById('linkDeviceModal').classList.add('active');
+}
+
+function showModal(modalId) {
+    document.getElementById('modalOverlay').classList.add('active');
+    document.getElementById(modalId).classList.add('active');
 }
 
 function closeAllModals() {
