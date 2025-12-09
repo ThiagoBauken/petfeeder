@@ -727,6 +727,179 @@ app.get('/api/status', (req, res) => {
 });
 
 // ========================================
+// ROTAS ESP32 (HTTPS - sem MQTT)
+// ========================================
+
+// Fila de comandos pendentes por dispositivo
+const deviceCommands = new Map();
+const deviceStatus = new Map();
+
+// ESP32 registra dispositivo (versão simplificada)
+app.post('/api/devices/register', (req, res) => {
+  const { device_id, firmware, ip } = req.body;
+
+  if (!device_id) {
+    return res.status(400).json({ success: false, message: 'device_id obrigatório' });
+  }
+
+  console.log(`📱 ESP32 conectado: ${device_id} (IP: ${ip})`);
+
+  // Atualizar status
+  deviceStatus.set(device_id, {
+    online: true,
+    ip: ip,
+    firmware: firmware,
+    lastSeen: new Date().toISOString()
+  });
+
+  res.json({
+    success: true,
+    message: 'Dispositivo registrado',
+    serverTime: new Date().toISOString()
+  });
+});
+
+// ESP32 busca comandos pendentes
+app.get('/api/devices/:deviceId/commands', (req, res) => {
+  const deviceId = req.params.deviceId;
+
+  // Buscar comando pendente
+  const commands = deviceCommands.get(deviceId) || [];
+
+  if (commands.length > 0) {
+    const cmd = commands.shift(); // Remove o primeiro comando
+    deviceCommands.set(deviceId, commands);
+
+    console.log(`📤 Enviando comando para ${deviceId}:`, cmd);
+    return res.json(cmd);
+  }
+
+  res.json({}); // Nenhum comando
+});
+
+// ESP32 envia status
+app.post('/api/devices/:deviceId/status', (req, res) => {
+  const deviceId = req.params.deviceId;
+  const { online, food_level, distance_cm, rssi, ip } = req.body;
+
+  console.log(`📊 Status de ${deviceId}: Nível=${food_level}%, Dist=${distance_cm}cm`);
+
+  // Atualizar status
+  deviceStatus.set(deviceId, {
+    online: online !== false,
+    food_level,
+    distance_cm,
+    rssi,
+    ip,
+    lastSeen: new Date().toISOString()
+  });
+
+  // Atualizar no banco
+  db.run(
+    'UPDATE devices SET status = ? WHERE device_id = ?',
+    ['online', deviceId]
+  );
+
+  // Notificar via WebSocket
+  db.get('SELECT user_id FROM devices WHERE device_id = ?', [deviceId], (err, device) => {
+    if (device) {
+      sendToUser(device.user_id, {
+        type: 'device_status',
+        data: { device_id: deviceId, food_level, distance_cm, online: true }
+      });
+    }
+  });
+
+  res.json({ success: true });
+});
+
+// ESP32 registra alimentação
+app.post('/api/feed/log', (req, res) => {
+  const { device_id, size, steps, food_level_after, trigger } = req.body;
+
+  console.log(`🍽️ Alimentação registrada: ${device_id} - ${size} (${steps} passos)`);
+
+  // Buscar pet e dispositivo
+  db.get(
+    `SELECT d.id as device_db_id, d.user_id, p.id as pet_id, p.name as pet_name
+     FROM devices d
+     LEFT JOIN pets p ON p.device_id = d.id
+     WHERE d.device_id = ?`,
+    [device_id],
+    (err, data) => {
+      if (data && data.pet_id) {
+        // Calcular gramas baseado no size
+        const amounts = { small: 50, medium: 100, large: 150 };
+        const amount = amounts[size] || 100;
+
+        // Registrar no histórico
+        db.run(
+          'INSERT INTO feeding_history (pet_id, device_id, amount, trigger_type) VALUES (?, ?, ?, ?)',
+          [data.pet_id, data.device_db_id, amount, trigger || 'remote']
+        );
+
+        // Notificar via WebSocket
+        sendToUser(data.user_id, {
+          type: 'feeding_complete',
+          data: {
+            pet_name: data.pet_name,
+            amount,
+            size,
+            timestamp: new Date().toISOString()
+          }
+        });
+      }
+
+      res.json({ success: true });
+    }
+  );
+});
+
+// Dashboard envia comando para ESP32
+app.post('/api/devices/:deviceId/feed', authMiddleware, (req, res) => {
+  const deviceId = req.params.deviceId;
+  const { size } = req.body;
+
+  // Verificar se dispositivo pertence ao usuário
+  db.get(
+    'SELECT * FROM devices WHERE device_id = ? AND user_id = ?',
+    [deviceId, req.userId],
+    (err, device) => {
+      if (err || !device) {
+        return res.status(404).json({ success: false, message: 'Dispositivo não encontrado' });
+      }
+
+      // Adicionar comando à fila
+      const commands = deviceCommands.get(deviceId) || [];
+      commands.push({
+        command: 'feed',
+        size: size || 'medium'
+      });
+      deviceCommands.set(deviceId, commands);
+
+      console.log(`📥 Comando de alimentação enfileirado para ${deviceId}: ${size}`);
+
+      res.json({
+        success: true,
+        message: 'Comando enviado ao dispositivo'
+      });
+    }
+  );
+});
+
+// Obter status de dispositivo
+app.get('/api/devices/:deviceId/status', authMiddleware, (req, res) => {
+  const deviceId = req.params.deviceId;
+  const status = deviceStatus.get(deviceId);
+
+  if (!status) {
+    return res.json({ online: false, message: 'Dispositivo nunca conectou' });
+  }
+
+  res.json(status);
+});
+
+// ========================================
 // INICIALIZAÇÃO
 // ========================================
 
