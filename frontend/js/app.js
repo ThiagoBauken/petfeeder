@@ -702,11 +702,11 @@ async function addPet() {
 
     try {
         const result = await api.createPet({
-            device_id: deviceId,
+            deviceId,
             name,
             type,
             compartment,
-            daily_amount: dailyAmount,
+            dailyAmount,
         });
 
         if (result.success) {
@@ -777,14 +777,12 @@ async function addSchedule() {
 
     try {
         const result = await api.createSchedule({
-            device_id: deviceId,
-            pet_id: petId,
+            deviceId,
+            petId,
             hour,
             minute,
             amount: dose.grams,
-            dose_size: doseSize,
-            active: true,
-            weekdays,
+            days: weekdays,
         });
 
         if (result.success) {

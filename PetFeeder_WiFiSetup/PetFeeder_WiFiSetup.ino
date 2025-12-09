@@ -1,25 +1,25 @@
 /*
- * PETFEEDER ESP32 - COM CONFIGURACAO WIFI VIA CAPTIVE PORTAL
+ * PETFEEDER ESP32 - WIFI SETUP + DEEP SLEEP INTELIGENTE
  *
  * FUNCIONALIDADES:
- * - Configura WiFi pelo celular (sem precisar editar codigo)
- * - Salva configuracoes na memoria flash
- * - Sincroniza horarios com servidor
- * - Funciona offline apos configuracao
+ * - Configura WiFi + Email pelo celular (captive portal)
+ * - Auto-registra no servidor usando email
+ * - SEM horarios = fica acordado (polling 30s)
+ * - COM horarios = ativa Deep Sleep economico
+ * - Funciona offline apos configurado
  *
- * PRIMEIRA EXECUCAO:
- * 1. ESP32 cria rede WiFi "PetFeeder-Setup"
- * 2. Conecte pelo celular nessa rede (senha: 12345678)
- * 3. Abre automaticamente pagina de configuracao
- * 4. Selecione sua rede WiFi e digite a senha
- * 5. Configure o Device ID do site
- * 6. Pronto! ESP32 reinicia e conecta
+ * FLUXO:
+ * 1. Liga -> Cria rede "PetFeeder-Setup" (senha: 12345678)
+ * 2. Configura WiFi + Email
+ * 3. Registra automaticamente na conta
+ * 4. Aguarda configuracao de horarios no site
+ * 5. Quando tiver horarios -> ativa Deep Sleep
  *
  * PINOS:
  * Motor: GPIO 16, 17, 18, 19 (28BYJ-48)
  * Sensor: TRIG=23, ECHO=22 (HC-SR04)
  * LED: GPIO 2
- * Botao Reset Config: GPIO 0 (BOOT)
+ * Botao Reset: GPIO 0 (BOOT)
  */
 
 #include <WiFi.h>
@@ -27,8 +27,10 @@
 #include <DNSServer.h>
 #include <Preferences.h>
 #include <HTTPClient.h>
+#include <WiFiClientSecure.h>
 #include <ArduinoJson.h>
 #include <time.h>
+#include <esp_sleep.h>
 
 // ==================== CONFIGURACOES ====================
 
@@ -50,6 +52,11 @@ String serverUrl = "https://telegram-petfeeder.pbzgje.easypanel.host";
 #define LED_PIN 2
 #define RESET_PIN 0
 
+// Intervalos
+#define POLL_INTERVAL_MS 30000       // 30s quando aguardando config
+#define SYNC_INTERVAL_HOURS 6        // Sync a cada 6h
+#define STATUS_INTERVAL_MS 300000    // Status a cada 5min
+
 // Motor
 const int DOSE_SMALL = 2048;
 const int DOSE_MEDIUM = 4096;
@@ -65,15 +72,70 @@ const int stepSequence[8][4] = {
 Preferences preferences;
 WebServer webServer(80);
 DNSServer dnsServer;
+WiFiClientSecure httpsClient;
 
 String savedSSID = "";
 String savedPassword = "";
 String deviceId = "";
 String userEmail = "";
 
-// Gera ID unico baseado no MAC Address base (nao muda entre AP e STA)
+bool configMode = false;
+bool wifiConnected = false;
+bool waitingForSchedules = false;  // Aguardando config de horarios
+int currentStep = 0;
+
+// Contadores RTC (sobrevivem ao Deep Sleep)
+RTC_DATA_ATTR int bootCount = 0;
+RTC_DATA_ATTR bool deviceRegistered = false;
+
+struct Schedule {
+  int hour;
+  int minute;
+  int doseSize;
+  bool active;
+  uint8_t days;  // Bitmask: bit0=Dom, bit1=Seg, ..., bit6=Sab
+};
+Schedule schedules[10];
+int scheduleCount = 0;
+
+unsigned long lastPollTime = 0;
+unsigned long lastStatusTime = 0;
+
+// ==================== PROTOTIPOS ====================
+
+void handleTimerWakeup();
+void handleNormalBoot();
+void startConfigMode();
+void startWaitingMode();
+void scheduleNextWakeup();
+void goToSleep(uint32_t seconds);
+void checkScheduledFeeding();
+bool fetchSchedules();
+void sendStatus();
+void registerDevice();
+void checkCommands();
+void sendFeedingLog(int doseSize);
+void dispense(int doseSize);
+float readFoodLevel();
+void handleRoot();
+void handleScan();
+void handleSave();
+void handleFeed();
+void handleLocalStatus();
+void checkResetButton();
+void loadConfig();
+void saveConfig(String ssid, String password, String email);
+void saveSchedulesToFlash();
+void clearConfig();
+bool connectWiFi();
+void setStep(int a, int b, int c, int d);
+void stopMotor();
+void setupPins();
+
+// ==================== DEVICE ID ====================
+
 String getDeviceId() {
-  uint64_t chipId = ESP.getEfuseMac(); // MAC gravado de fabrica, sempre igual
+  uint64_t chipId = ESP.getEfuseMac();
   char id[18];
   sprintf(id, "PF_%02X%02X%02X",
     (uint8_t)(chipId >> 24),
@@ -81,19 +143,6 @@ String getDeviceId() {
     (uint8_t)(chipId >> 40));
   return String(id);
 }
-
-bool configMode = false;
-bool wifiConnected = false;
-int currentStep = 0;
-
-struct Schedule {
-  int hour;
-  int minute;
-  int doseSize;
-  bool active;
-};
-Schedule schedules[10];
-int scheduleCount = 0;
 
 // ==================== FUNCOES DO MOTOR ====================
 
@@ -120,7 +169,7 @@ void dispense(int doseSize) {
     default: steps = DOSE_MEDIUM; break;
   }
 
-  Serial.printf("Dispensando %d passos...\n", steps);
+  Serial.printf("[MOTOR] Dispensando %d passos...\n", steps);
   digitalWrite(LED_PIN, HIGH);
 
   for (int i = 0; i < steps; i++) {
@@ -133,11 +182,8 @@ void dispense(int doseSize) {
   }
 
   stopMotor();
-  Serial.println("Alimentacao concluida!");
-
-  // Verifica e envia nivel de comida apos alimentacao
-  delay(500); // Espera comida assentar
-  sendStatus();
+  Serial.println("[OK] Alimentacao concluida!");
+  delay(500);
 }
 
 // ==================== SENSOR ====================
@@ -155,7 +201,7 @@ float readFoodLevel() {
   float distance = duration * 0.034 / 2;
   if (distance < 5) return 100;
   if (distance > 20) return 0;
-  return map(distance, 20, 5, 0, 100);
+  return map((long)distance, 20, 5, 0, 100);
 }
 
 // ==================== CONFIGURACAO PERSISTENTE ====================
@@ -164,13 +210,25 @@ void loadConfig() {
   preferences.begin("petfeeder", false);
   savedSSID = preferences.getString("ssid", "");
   savedPassword = preferences.getString("password", "");
-  deviceId = getDeviceId(); // Sempre usa o ID baseado no MAC
+  deviceId = getDeviceId();
   userEmail = preferences.getString("email", "");
+  scheduleCount = preferences.getInt("schedCount", 0);
 
-  Serial.println("\nConfiguracoes carregadas:");
-  Serial.println("SSID: " + (savedSSID.length() > 0 ? savedSSID : "(nao configurado)"));
-  Serial.println("Device ID: " + deviceId);
-  Serial.println("Email: " + (userEmail.length() > 0 ? userEmail : "(nao configurado)"));
+  // Carrega horarios da flash
+  for (int i = 0; i < scheduleCount && i < 10; i++) {
+    String key = "s" + String(i);
+    schedules[i].hour = preferences.getInt((key + "h").c_str(), 0);
+    schedules[i].minute = preferences.getInt((key + "m").c_str(), 0);
+    schedules[i].doseSize = preferences.getInt((key + "d").c_str(), 2);
+    schedules[i].active = preferences.getBool((key + "a").c_str(), true);
+    schedules[i].days = preferences.getUChar((key + "w").c_str(), 0x7F);  // Todos os dias
+  }
+
+  Serial.println("\n[CONFIG] Carregado:");
+  Serial.printf("  SSID: %s\n", savedSSID.length() > 0 ? savedSSID.c_str() : "(vazio)");
+  Serial.printf("  Email: %s\n", userEmail.length() > 0 ? userEmail.c_str() : "(vazio)");
+  Serial.printf("  Device: %s\n", deviceId.c_str());
+  Serial.printf("  Horarios: %d\n", scheduleCount);
 }
 
 void saveConfig(String ssid, String password, String email) {
@@ -181,150 +239,145 @@ void saveConfig(String ssid, String password, String email) {
   savedPassword = password;
   userEmail = email;
   deviceId = getDeviceId();
-  Serial.println("Configuracoes salvas!");
+  deviceRegistered = false;  // Precisa registrar novamente
+  Serial.println("[CONFIG] Salvo!");
 }
 
-// Registra dispositivo automaticamente no servidor
-void registerDevice() {
-  if (userEmail.length() == 0) return;
-
-  Serial.println("\nRegistrando dispositivo no servidor...");
-
-  HTTPClient http;
-  String url = serverUrl + "/api/devices/auto-register";
-  http.begin(url);
-  http.addHeader("Content-Type", "application/json");
-  http.setTimeout(10000);
-
-  String json = "{\"deviceId\":\"" + deviceId + "\",\"email\":\"" + userEmail + "\",\"name\":\"PetFeeder " + deviceId.substring(3) + "\"}";
-
-  Serial.println("Enviando: " + json);
-
-  int httpCode = http.POST(json);
-
-  if (httpCode == 200 || httpCode == 201) {
-    Serial.println("Dispositivo registrado com sucesso!");
-  } else {
-    String response = http.getString();
-    Serial.println("Erro ao registrar: " + String(httpCode));
-    Serial.println("Resposta: " + response);
+void saveSchedulesToFlash() {
+  preferences.putInt("schedCount", scheduleCount);
+  for (int i = 0; i < scheduleCount && i < 10; i++) {
+    String key = "s" + String(i);
+    preferences.putInt((key + "h").c_str(), schedules[i].hour);
+    preferences.putInt((key + "m").c_str(), schedules[i].minute);
+    preferences.putInt((key + "d").c_str(), schedules[i].doseSize);
+    preferences.putBool((key + "a").c_str(), schedules[i].active);
+    preferences.putUChar((key + "w").c_str(), schedules[i].days);
   }
-
-  http.end();
-}
-
-// Envia status (nivel de comida) para o servidor
-void sendStatus() {
-  if (!wifiConnected || deviceId.length() == 0) return;
-
-  float foodLevel = readFoodLevel();
-  if (foodLevel < 0) foodLevel = 0;
-
-  // Distancia em cm (para debug)
-  digitalWrite(TRIG_PIN, LOW);
-  delayMicroseconds(2);
-  digitalWrite(TRIG_PIN, HIGH);
-  delayMicroseconds(10);
-  digitalWrite(TRIG_PIN, LOW);
-  long duration = pulseIn(ECHO_PIN, HIGH, 30000);
-  float distance = duration * 0.034 / 2;
-
-  HTTPClient http;
-  String url = serverUrl + "/api/devices/" + deviceId + "/status";
-  http.begin(url);
-  http.addHeader("Content-Type", "application/json");
-  http.setTimeout(10000);
-
-  String json = "{\"food_level\":" + String((int)foodLevel) +
-                ",\"distance_cm\":" + String(distance, 1) +
-                ",\"rssi\":" + String(WiFi.RSSI()) +
-                ",\"ip\":\"" + WiFi.localIP().toString() + "\"}";
-
-  int httpCode = http.POST(json);
-
-  if (httpCode == 200) {
-    Serial.println("Status enviado: " + String((int)foodLevel) + "%");
-  } else {
-    Serial.println("Erro ao enviar status: " + String(httpCode));
-  }
-
-  http.end();
-
-  // Alerta de comida baixa
-  if (foodLevel < 20) {
-    Serial.println("⚠️ ALERTA: Nivel de comida baixo! " + String((int)foodLevel) + "%");
-  }
+  Serial.printf("[CONFIG] %d horarios salvos na flash\n", scheduleCount);
 }
 
 void clearConfig() {
   preferences.clear();
   savedSSID = "";
   savedPassword = "";
-  deviceId = "";
-  Serial.println("Configuracoes apagadas!");
-}
-
-void saveSchedulesToFlash() {
-  preferences.putInt("schedCount", scheduleCount);
-  for (int i = 0; i < scheduleCount; i++) {
-    String key = "s" + String(i);
-    preferences.putInt((key + "h").c_str(), schedules[i].hour);
-    preferences.putInt((key + "m").c_str(), schedules[i].minute);
-    preferences.putInt((key + "d").c_str(), schedules[i].doseSize);
-    preferences.putBool((key + "a").c_str(), schedules[i].active);
-  }
-  Serial.println("Horarios salvos na flash");
-}
-
-void loadSchedulesFromFlash() {
-  scheduleCount = preferences.getInt("schedCount", 0);
-  for (int i = 0; i < scheduleCount; i++) {
-    String key = "s" + String(i);
-    schedules[i].hour = preferences.getInt((key + "h").c_str(), 0);
-    schedules[i].minute = preferences.getInt((key + "m").c_str(), 0);
-    schedules[i].doseSize = preferences.getInt((key + "d").c_str(), 2);
-    schedules[i].active = preferences.getBool((key + "a").c_str(), true);
-  }
-  Serial.println(String(scheduleCount) + " horarios carregados da flash");
+  userEmail = "";
+  scheduleCount = 0;
+  deviceRegistered = false;
+  Serial.println("[CONFIG] Limpo!");
 }
 
 // ==================== COMUNICACAO COM SERVIDOR ====================
+
+void registerDevice() {
+  if (userEmail.length() == 0 || deviceRegistered) return;
+
+  Serial.println("[REGISTRO] Registrando dispositivo...");
+
+  HTTPClient http;
+  String url = serverUrl + "/api/devices/auto-register";
+  http.begin(httpsClient, url);
+  http.addHeader("Content-Type", "application/json");
+  http.setTimeout(10000);
+
+  StaticJsonDocument<256> doc;
+  doc["deviceId"] = deviceId;
+  doc["email"] = userEmail;
+  doc["name"] = "PetFeeder " + deviceId.substring(3);
+
+  String json;
+  serializeJson(doc, json);
+
+  int httpCode = http.POST(json);
+
+  if (httpCode == 200 || httpCode == 201) {
+    Serial.println("[OK] Dispositivo registrado!");
+    deviceRegistered = true;
+  } else {
+    String response = http.getString();
+    Serial.printf("[ERRO] Registro falhou: %d - %s\n", httpCode, response.c_str());
+  }
+
+  http.end();
+}
+
+void sendStatus() {
+  if (!wifiConnected || deviceId.length() == 0) return;
+
+  float foodLevel = readFoodLevel();
+  if (foodLevel < 0) foodLevel = 0;
+
+  HTTPClient http;
+  String url = serverUrl + "/api/devices/" + deviceId + "/status";
+  http.begin(httpsClient, url);
+  http.addHeader("Content-Type", "application/json");
+  http.setTimeout(10000);
+
+  StaticJsonDocument<256> doc;
+  doc["food_level"] = (int)foodLevel;
+  doc["rssi"] = WiFi.RSSI();
+  doc["ip"] = WiFi.localIP().toString();
+  doc["schedules_count"] = scheduleCount;
+  doc["waiting_config"] = waitingForSchedules;
+  doc["boot_count"] = bootCount;
+
+  String json;
+  serializeJson(doc, json);
+
+  int httpCode = http.POST(json);
+
+  if (httpCode == 200) {
+    Serial.printf("[STATUS] Enviado: %d%%\n", (int)foodLevel);
+  } else {
+    Serial.printf("[ERRO] Status: %d\n", httpCode);
+  }
+
+  http.end();
+
+  if (foodLevel < 20) {
+    Serial.println("[ALERTA] Nivel de comida baixo!");
+  }
+}
 
 void sendFeedingLog(int doseSize) {
   if (!wifiConnected || deviceId.length() == 0) return;
 
   HTTPClient http;
   String url = serverUrl + "/api/feed/log";
-  http.begin(url);
+  http.begin(httpsClient, url);
   http.addHeader("Content-Type", "application/json");
 
   String size = doseSize == 1 ? "small" : doseSize == 3 ? "large" : "medium";
-  String json = "{\"deviceId\":\"" + deviceId + "\",\"size\":\"" + size + "\",\"trigger\":\"scheduled\"}";
+
+  StaticJsonDocument<256> doc;
+  doc["device_id"] = deviceId;
+  doc["size"] = size;
+  doc["trigger"] = "scheduled";
+  doc["food_level_after"] = (int)readFoodLevel();
+
+  String json;
+  serializeJson(doc, json);
 
   int httpCode = http.POST(json);
   if (httpCode == 200) {
-    Serial.println("Log enviado ao servidor");
-  } else {
-    Serial.println("Erro ao enviar log: " + String(httpCode));
+    Serial.println("[LOG] Alimentacao registrada");
   }
   http.end();
 }
 
-void fetchSchedules() {
-  if (!wifiConnected || deviceId.length() == 0) return;
+bool fetchSchedules() {
+  if (!wifiConnected || deviceId.length() == 0) return false;
 
-  Serial.println("\nBuscando horarios do servidor...");
+  Serial.println("[SYNC] Buscando horarios...");
 
   HTTPClient http;
   String url = serverUrl + "/api/devices/" + deviceId + "/schedules";
-  http.begin(url);
+  http.begin(httpsClient, url);
   http.setTimeout(10000);
 
   int httpCode = http.GET();
 
   if (httpCode == 200) {
     String payload = http.getString();
-    Serial.println("Resposta: " + payload);
 
     StaticJsonDocument<1024> doc;
     DeserializationError error = deserializeJson(doc, payload);
@@ -345,44 +398,166 @@ void fetchSchedules() {
         else schedules[scheduleCount].doseSize = 2;
 
         schedules[scheduleCount].active = item["active"] | true;
+
+        // Parse dias
+        schedules[scheduleCount].days = 0x7F;  // Default: todos os dias
+        if (item.containsKey("days")) {
+          JsonArray daysArr = item["days"];
+          schedules[scheduleCount].days = 0;
+          for (int d : daysArr) {
+            schedules[scheduleCount].days |= (1 << d);
+          }
+        }
+
+        Serial.printf("  [%d] %02d:%02d dose=%d dias=0x%02X\n",
+          scheduleCount + 1,
+          schedules[scheduleCount].hour,
+          schedules[scheduleCount].minute,
+          schedules[scheduleCount].doseSize,
+          schedules[scheduleCount].days);
+
         scheduleCount++;
       }
 
-      Serial.println(String(scheduleCount) + " horarios carregados");
+      Serial.printf("[OK] %d horarios sincronizados\n", scheduleCount);
       saveSchedulesToFlash();
+      http.end();
+      return true;
     }
   } else {
-    Serial.println("Erro HTTP: " + String(httpCode));
-    loadSchedulesFromFlash();
+    Serial.printf("[ERRO] Sync: %d\n", httpCode);
+  }
+
+  http.end();
+  return false;
+}
+
+void checkCommands() {
+  if (!wifiConnected || deviceId.length() == 0) return;
+
+  HTTPClient http;
+  String url = serverUrl + "/api/devices/" + deviceId + "/commands";
+  http.begin(httpsClient, url);
+  http.setTimeout(5000);
+
+  int httpCode = http.GET();
+
+  if (httpCode == 200) {
+    String payload = http.getString();
+    StaticJsonDocument<256> doc;
+
+    if (!deserializeJson(doc, payload) && doc.containsKey("command")) {
+      String cmd = doc["command"].as<String>();
+
+      if (cmd == "feed") {
+        String size = doc["size"] | "medium";
+        int doseSize = size == "small" ? 1 : size == "large" ? 3 : 2;
+        Serial.printf("[COMANDO] Alimentar: %s\n", size.c_str());
+        dispense(doseSize);
+        sendFeedingLog(doseSize);
+        sendStatus();
+      } else if (cmd == "sync") {
+        fetchSchedules();
+      }
+    }
   }
 
   http.end();
 }
 
+// ==================== DEEP SLEEP ====================
+
+void scheduleNextWakeup() {
+  struct tm timeinfo;
+  if (!getLocalTime(&timeinfo)) {
+    Serial.println("[SLEEP] Sem hora. Dormindo 1 hora...");
+    goToSleep(3600);
+    return;
+  }
+
+  int currentMins = timeinfo.tm_hour * 60 + timeinfo.tm_min;
+  int currentDay = timeinfo.tm_wday;
+  int minSleepMins = 24 * 60;
+  bool foundSchedule = false;
+
+  // Procura proximo horario
+  for (int dayOffset = 0; dayOffset < 7; dayOffset++) {
+    int checkDay = (currentDay + dayOffset) % 7;
+
+    for (int i = 0; i < scheduleCount; i++) {
+      if (!schedules[i].active) continue;
+      if (!(schedules[i].days & (1 << checkDay))) continue;
+
+      int scheduleMins = schedules[i].hour * 60 + schedules[i].minute;
+
+      if (dayOffset == 0 && scheduleMins <= currentMins + 1) continue;
+
+      int sleepMins;
+      if (dayOffset == 0) {
+        sleepMins = scheduleMins - currentMins;
+      } else {
+        sleepMins = (24 * 60 - currentMins) + (dayOffset - 1) * 24 * 60 + scheduleMins;
+      }
+
+      if (sleepMins < minSleepMins) {
+        minSleepMins = sleepMins;
+        foundSchedule = true;
+      }
+    }
+
+    if (foundSchedule && dayOffset == 0) break;
+  }
+
+  if (foundSchedule) {
+    int syncMins = SYNC_INTERVAL_HOURS * 60;
+    if (minSleepMins > syncMins) {
+      minSleepMins = syncMins;
+      Serial.printf("[SLEEP] Sync em %d min\n", minSleepMins);
+    } else {
+      Serial.printf("[SLEEP] Alimentacao em %d min\n", minSleepMins);
+    }
+  } else {
+    minSleepMins = SYNC_INTERVAL_HOURS * 60;
+    Serial.printf("[SLEEP] Sem horarios. Sync em %d min\n", minSleepMins);
+  }
+
+  goToSleep(minSleepMins * 60);
+}
+
+void goToSleep(uint32_t seconds) {
+  Serial.printf("[SLEEP] Dormindo por %d segundos...\n\n", seconds);
+
+  WiFi.disconnect(true);
+  WiFi.mode(WIFI_OFF);
+  stopMotor();
+
+  esp_sleep_enable_timer_wakeup(seconds * 1000000ULL);
+  esp_deep_sleep_start();
+}
+
 // ==================== VERIFICACAO DE HORARIOS ====================
 
-void checkSchedules() {
+void checkScheduledFeeding() {
   struct tm timeinfo;
   if (!getLocalTime(&timeinfo)) return;
 
   int currentHour = timeinfo.tm_hour;
   int currentMinute = timeinfo.tm_min;
-  static int lastFedMinute = -1;
-
-  if (currentMinute == lastFedMinute) return;
+  int currentDay = timeinfo.tm_wday;
 
   for (int i = 0; i < scheduleCount; i++) {
     if (!schedules[i].active) continue;
+    if (!(schedules[i].days & (1 << currentDay))) continue;
 
-    if (schedules[i].hour == currentHour && schedules[i].minute == currentMinute) {
-      Serial.println("\nHorario de alimentacao!");
-      Serial.printf("%02d:%02d - Dose: %s\n", currentHour, currentMinute,
-                    schedules[i].doseSize == 1 ? "pequena" :
-                    schedules[i].doseSize == 3 ? "grande" : "media");
+    int scheduleMins = schedules[i].hour * 60 + schedules[i].minute;
+    int currentMins = currentHour * 60 + currentMinute;
 
+    if (abs(scheduleMins - currentMins) <= 2) {
+      Serial.printf("[ALIMENTAR] Horario %02d:%02d\n", schedules[i].hour, schedules[i].minute);
       dispense(schedules[i].doseSize);
-      lastFedMinute = currentMinute;
       sendFeedingLog(schedules[i].doseSize);
+      sendStatus();
+      return;
     }
   }
 }
@@ -390,6 +565,7 @@ void checkSchedules() {
 // ==================== WIFI ====================
 
 bool connectWiFi() {
+  Serial.printf("[WIFI] Conectando a %s", savedSSID.c_str());
   WiFi.mode(WIFI_STA);
   WiFi.begin(savedSSID.c_str(), savedPassword.c_str());
 
@@ -402,6 +578,10 @@ bool connectWiFi() {
   Serial.println();
 
   wifiConnected = (WiFi.status() == WL_CONNECTED);
+  if (wifiConnected) {
+    httpsClient.setInsecure();
+    Serial.printf("[OK] IP: %s\n", WiFi.localIP().toString().c_str());
+  }
   return wifiConnected;
 }
 
@@ -440,12 +620,12 @@ void handleRoot() {
     .device-id-box h3{margin-bottom:5px;font-size:14px;opacity:0.9}
     .device-id-box .id{font-size:28px;font-weight:bold;font-family:monospace;letter-spacing:2px}
     .device-id-box p{font-size:12px;margin-top:10px;opacity:0.8}
-    .copy-btn{background:rgba(255,255,255,0.2);border:none;color:#fff;padding:8px 15px;border-radius:5px;margin-top:10px;cursor:pointer}
+    .info{background:#e3f2fd;padding:15px;border-radius:10px;margin-top:20px;font-size:13px;color:#1565c0}
   </style>
 </head>
 <body>
   <div class="container">
-    <div class="icon">&#128062;</div>
+    <div class="icon">&#128054;</div>
     <h1>PetFeeder Setup</h1>
     <p class="subtitle">Configure seu alimentador</p>
 
@@ -457,14 +637,14 @@ void handleRoot() {
 
     <div id="form">
       <form id="configForm" onsubmit="saveConfig(event)">
-        <label>Email da sua conta PetFeeder</label>
+        <label>Email da sua conta PetFeeder *</label>
         <input type="email" id="email" placeholder="seu@email.com" required>
         <hr style="border:none;border-top:1px solid #eee;margin:20px 0">
         <button type="button" class="scan-btn" onclick="scanNetworks()">Buscar Redes WiFi</button>
         <div id="networks" class="networks"></div>
-        <label>Rede WiFi</label>
+        <label>Rede WiFi *</label>
         <input type="text" id="ssid" placeholder="Selecione acima ou digite" required>
-        <label>Senha WiFi</label>
+        <label>Senha WiFi *</label>
         <input type="password" id="password" placeholder="Senha da rede" required>
         <button type="submit">Conectar e Vincular</button>
       </form>
@@ -475,8 +655,11 @@ void handleRoot() {
     </div>
     <div id="success" class="success" style="display:none">
       <h2>Configurado!</h2>
-      <p>O ESP32 vai reiniciar, conectar ao WiFi e vincular automaticamente na sua conta.</p>
-      <p style="margin-top:10px;font-size:14px">Acesse o site para criar seus horarios de alimentacao!</p>
+      <p>O ESP32 vai reiniciar e vincular automaticamente na sua conta.</p>
+    </div>
+    <div class="info">
+      <strong>Proximo passo:</strong> Acesse o site, faca login e configure os horarios de alimentacao.
+      O modo economia de energia sera ativado automaticamente!
     </div>
   </div>
   <script>
@@ -514,7 +697,7 @@ void handleRoot() {
 }
 
 void handleScan() {
-  Serial.println("Escaneando redes WiFi...");
+  Serial.println("[SCAN] Buscando redes...");
   int n = WiFi.scanNetworks();
   String json = "{\"networks\":[";
   for (int i = 0; i < n && i < 10; i++) {
@@ -530,9 +713,9 @@ void handleSave() {
   String password = webServer.arg("password");
   String email = webServer.arg("email");
 
-  Serial.println("\nSalvando configuracoes...");
-  Serial.println("SSID: " + ssid);
-  Serial.println("Email: " + email);
+  Serial.println("\n[SAVE] Configurando...");
+  Serial.printf("  SSID: %s\n", ssid.c_str());
+  Serial.printf("  Email: %s\n", email.c_str());
 
   saveConfig(ssid, password, email);
   webServer.send(200, "application/json", "{\"success\":true}");
@@ -541,12 +724,28 @@ void handleSave() {
   ESP.restart();
 }
 
-void handleStatus() {
-  String json = "{";
-  json += "\"configured\":" + String(savedSSID.length() > 0 ? "true" : "false") + ",";
-  json += "\"ssid\":\"" + savedSSID + "\",";
-  json += "\"deviceId\":\"" + deviceId + "\"";
-  json += "}";
+void handleFeed() {
+  String size = webServer.arg("size");
+  int doseSize = size == "small" ? 1 : size == "large" ? 3 : 2;
+
+  dispense(doseSize);
+  if (wifiConnected) {
+    sendFeedingLog(doseSize);
+    sendStatus();
+  }
+
+  webServer.send(200, "application/json", "{\"success\":true}");
+}
+
+void handleLocalStatus() {
+  StaticJsonDocument<256> doc;
+  doc["device_id"] = deviceId;
+  doc["food_level"] = (int)readFoodLevel();
+  doc["schedules"] = scheduleCount;
+  doc["waiting_config"] = waitingForSchedules;
+
+  String json;
+  serializeJson(doc, json);
   webServer.send(200, "application/json", json);
 }
 
@@ -556,41 +755,93 @@ void startConfigMode() {
   WiFi.softAP(AP_SSID, AP_PASS);
 
   Serial.println("\n========================================");
-  Serial.println("  MODO CONFIGURACAO ATIVADO");
+  Serial.println("    MODO CONFIGURACAO");
   Serial.println("========================================");
-  Serial.println("1. Conecte na rede: PetFeeder-Setup");
-  Serial.println("2. Senha: 12345678");
-  Serial.println("3. Acesse: http://192.168.4.1");
-  Serial.println("========================================");
-  Serial.println("IP: " + WiFi.softAPIP().toString());
+  Serial.printf("WiFi: %s\n", AP_SSID);
+  Serial.printf("Senha: %s\n", AP_PASS);
+  Serial.printf("URL: http://%s\n", WiFi.softAPIP().toString().c_str());
+  Serial.println("========================================\n");
 
   dnsServer.start(53, "*", WiFi.softAPIP());
 
   webServer.on("/", handleRoot);
   webServer.on("/scan", handleScan);
   webServer.on("/save", HTTP_POST, handleSave);
-  webServer.on("/status", handleStatus);
+  webServer.on("/feed", handleFeed);
+  webServer.on("/status", handleLocalStatus);
   webServer.onNotFound(handleRoot);
 
   webServer.begin();
 }
 
-// ==================== MODO NORMAL ====================
+void startWaitingMode() {
+  waitingForSchedules = true;
+  Serial.println("\n========================================");
+  Serial.println("    AGUARDANDO CONFIGURACAO");
+  Serial.println("========================================");
+  Serial.println("Configure os horarios pelo site!");
+  Serial.printf("IP local: http://%s\n", WiFi.localIP().toString().c_str());
+  Serial.println("========================================\n");
 
-void normalMode() {
-  Serial.println("\nEntrando em modo normal de operacao");
-  configMode = false;
-  digitalWrite(LED_PIN, HIGH);
+  // Servidor local para alimentar manualmente
+  webServer.on("/", []() {
+    float level = readFoodLevel();
+    String html = R"rawliteral(
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PetFeeder</title>
+  <style>
+    *{box-sizing:border-box;font-family:Arial}
+    body{margin:0;padding:20px;background:#f5f5f5;min-height:100vh}
+    .card{background:#fff;border-radius:15px;padding:25px;max-width:400px;margin:0 auto;box-shadow:0 2px 10px rgba(0,0,0,.1)}
+    h1{text-align:center;color:#333}
+    .status{background:#fff3cd;padding:15px;border-radius:10px;margin:20px 0;text-align:center}
+    .btn{display:block;width:100%;padding:15px;margin:10px 0;border:none;border-radius:10px;font-size:16px;cursor:pointer;color:#fff}
+    .btn-med{background:#4CAF50}
+    .btn-sm{background:#8BC34A}
+    .btn-lg{background:#FF9800}
+    .info{font-size:13px;color:#666;text-align:center;margin-top:20px}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>PetFeeder )rawliteral" + deviceId + R"rawliteral(</h1>
+    <div class="status">
+      <strong>Aguardando configuracao</strong><br>
+      Configure os horarios pelo site
+    </div>
+    <button class="btn btn-med" onclick="feed('medium')">Alimentar (Media)</button>
+    <button class="btn btn-sm" onclick="feed('small')">Porcao Pequena</button>
+    <button class="btn btn-lg" onclick="feed('large')">Porcao Grande</button>
+    <p class="info">Nivel: )rawliteral" + String((int)level) + R"rawliteral(%</p>
+  </div>
+  <script>
+  function feed(s){fetch('/feed?size='+s).then(function(r){return r.json();}).then(function(d){alert('Alimentando!');}).catch(function(e){alert('Erro');});}
+  </script>
+</body>
+</html>
+)rawliteral";
+    webServer.send(200, "text/html", html);
+  });
+
+  webServer.on("/feed", handleFeed);
+  webServer.on("/status", handleLocalStatus);
+  webServer.begin();
 }
+
+// ==================== BOTAO RESET ====================
 
 void checkResetButton() {
   if (digitalRead(RESET_PIN) == LOW) {
-    Serial.println("\nBotao BOOT detectado...");
+    Serial.println("[BOTAO] Detectado...");
     unsigned long start = millis();
 
     while (digitalRead(RESET_PIN) == LOW) {
       if (millis() - start > 3000) {
-        Serial.println("Limpando configuracoes...");
+        Serial.println("[RESET] Limpando configuracoes...");
         clearConfig();
 
         for (int i = 0; i < 10; i++) {
@@ -605,7 +856,7 @@ void checkResetButton() {
   }
 }
 
-// ==================== CONFIGURACAO DE PINOS ====================
+// ==================== SETUP ====================
 
 void setupPins() {
   pinMode(MOTOR_IN1, OUTPUT);
@@ -621,55 +872,121 @@ void setupPins() {
   pinMode(RESET_PIN, INPUT_PULLUP);
 
   digitalWrite(LED_PIN, HIGH);
-  delay(500);
+  delay(300);
   digitalWrite(LED_PIN, LOW);
 }
 
-// ==================== SETUP ====================
-
 void setup() {
   Serial.begin(115200);
-  delay(1000);
+  delay(500);
+
+  bootCount++;
 
   Serial.println("\n");
   Serial.println("========================================");
-  Serial.println("  PETFEEDER ESP32 - WiFi Setup Edition");
+  Serial.println("  PETFEEDER - DEEP SLEEP INTELIGENTE");
   Serial.println("========================================");
+  Serial.printf("Boot #%d\n", bootCount);
 
   setupPins();
   loadConfig();
   checkResetButton();
 
-  if (savedSSID.length() > 0) {
-    Serial.println("\nTentando conectar ao WiFi salvo...");
-    Serial.println("SSID: " + savedSSID);
+  // Verifica motivo do wakeup
+  esp_sleep_wakeup_cause_t wakeup_reason = esp_sleep_get_wakeup_cause();
 
-    if (connectWiFi()) {
-      Serial.println("WiFi conectado!");
-      Serial.println("IP: " + WiFi.localIP().toString());
-
-      configTime(-3 * 3600, 0, "pool.ntp.org");
-
-      // Registra dispositivo automaticamente na conta do usuario
-      registerDevice();
-
-      // Envia nivel de comida inicial
-      sendStatus();
-
-      fetchSchedules();
-      normalMode();
+  switch (wakeup_reason) {
+    case ESP_SLEEP_WAKEUP_TIMER:
+      Serial.println("[WAKEUP] Timer - alimentacao ou sync");
+      handleTimerWakeup();
       return;
-    }
+
+    default:
+      Serial.println("[BOOT] Normal");
+      handleNormalBoot();
+      return;
+  }
+}
+
+void handleTimerWakeup() {
+  // Conecta WiFi
+  if (!connectWiFi()) {
+    Serial.println("[OFFLINE] Usando horarios salvos");
+  } else {
+    configTime(-3 * 3600, 0, "pool.ntp.org");
+    delay(1000);
   }
 
-  Serial.println("\nWiFi nao configurado ou falhou");
-  Serial.println("Entrando em modo configuracao...");
-  startConfigMode();
+  // Verifica se e hora de alimentar
+  checkScheduledFeeding();
+
+  // Sync se necessario
+  if (wifiConnected) {
+    static unsigned long lastSync = 0;
+    if (bootCount % 12 == 0) {  // Sync a cada ~12 wakeups
+      fetchSchedules();
+    }
+    sendStatus();
+    checkCommands();
+  }
+
+  // Volta a dormir
+  scheduleNextWakeup();
+}
+
+void handleNormalBoot() {
+  // Nao configurado? Inicia portal
+  if (savedSSID.length() == 0) {
+    Serial.println("[CONFIG] Nao configurado");
+    startConfigMode();
+    return;
+  }
+
+  // Tenta conectar WiFi
+  if (!connectWiFi()) {
+    Serial.println("[ERRO] WiFi falhou");
+    if (scheduleCount > 0) {
+      Serial.println("[OFFLINE] Usando horarios salvos");
+      scheduleNextWakeup();
+    } else {
+      Serial.println("[ERRO] Sem WiFi e sem horarios. Reiniciando portal...");
+      clearConfig();
+      ESP.restart();
+    }
+    return;
+  }
+
+  // Configura NTP
+  configTime(-3 * 3600, 0, "pool.ntp.org");
+  delay(1000);
+
+  // Registra dispositivo
+  registerDevice();
+
+  // Busca horarios
+  fetchSchedules();
+
+  // Envia status
+  sendStatus();
+
+  // Verifica comandos
+  checkCommands();
+
+  // Decide: Deep Sleep ou aguardar configuracao
+  if (scheduleCount > 0) {
+    Serial.println("\n[OK] Horarios configurados!");
+    Serial.println("[SLEEP] Ativando modo economia...");
+    scheduleNextWakeup();
+  } else {
+    Serial.println("\n[AGUARDANDO] Sem horarios");
+    startWaitingMode();
+  }
 }
 
 // ==================== LOOP ====================
 
 void loop() {
+  // Modo configuracao (captive portal)
   if (configMode) {
     dnsServer.processNextRequest();
     webServer.handleClient();
@@ -679,28 +996,39 @@ void loop() {
       digitalWrite(LED_PIN, !digitalRead(LED_PIN));
       lastBlink = millis();
     }
-  } else {
-    checkSchedules();
+    return;
+  }
 
+  // Modo aguardando configuracao de horarios
+  if (waitingForSchedules) {
+    webServer.handleClient();
+
+    // LED pisca devagar
     static unsigned long lastBlink = 0;
-    if (millis() - lastBlink > 2000) {
+    if (millis() - lastBlink > 1000) {
       digitalWrite(LED_PIN, !digitalRead(LED_PIN));
       lastBlink = millis();
     }
 
-    static unsigned long lastSync = 0;
-    if (millis() - lastSync > 6UL * 3600000UL) {
-      fetchSchedules();
-      lastSync = millis();
-    }
+    // Polling periodico
+    if (millis() - lastPollTime > POLL_INTERVAL_MS) {
+      lastPollTime = millis();
+      Serial.println("\n[POLL] Verificando horarios...");
 
-    // Envia status a cada 5 minutos
-    static unsigned long lastStatus = 0;
-    if (millis() - lastStatus > 5UL * 60000UL) {
+      if (fetchSchedules() && scheduleCount > 0) {
+        Serial.println("[OK] Horarios encontrados!");
+        waitingForSchedules = false;
+        scheduleNextWakeup();
+      } else {
+        Serial.println("[AGUARDANDO] Configure os horarios pelo site");
+      }
+
       sendStatus();
-      lastStatus = millis();
+      checkCommands();
     }
-
-    delay(1000);
+    return;
   }
+
+  // Modo normal nao deveria chegar aqui (usa Deep Sleep)
+  delay(1000);
 }
