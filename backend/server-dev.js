@@ -68,10 +68,16 @@ db.serialize(() => {
       last_seen DATETIME,
       ip_address TEXT,
       rssi INTEGER,
+      power_save INTEGER DEFAULT 0,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (user_id) REFERENCES users(id)
     )
   `);
+
+  // Adicionar coluna power_save se não existir (migração)
+  db.run(`ALTER TABLE devices ADD COLUMN power_save INTEGER DEFAULT 0`, (err) => {
+    // Ignora erro se coluna já existe
+  });
 
   // Pets
   db.run(`
@@ -618,6 +624,42 @@ app.delete('/api/devices/:id', authMiddleware, (req, res) => {
       }
     );
   });
+});
+
+// Toggle modo economia de energia
+app.put('/api/devices/:id/power-save', authMiddleware, (req, res) => {
+  const deviceId = req.params.id;
+  const { enabled } = req.body;
+
+  db.run(
+    'UPDATE devices SET power_save = ? WHERE id = ? AND user_id = ?',
+    [enabled ? 1 : 0, deviceId, req.userId],
+    function(err) {
+      if (err) {
+        return res.status(500).json({ success: false, message: 'Erro ao atualizar modo economia' });
+      }
+      if (this.changes === 0) {
+        return res.status(404).json({ success: false, message: 'Dispositivo não encontrado' });
+      }
+
+      // Buscar device_id para enviar comando
+      db.get('SELECT device_id FROM devices WHERE id = ?', [deviceId], (err, device) => {
+        if (device) {
+          // Adiciona comando de sync para o ESP32 atualizar configuração
+          const commands = deviceCommands.get(device.device_id) || [];
+          commands.push({ command: 'sync' });
+          deviceCommands.set(device.device_id, commands);
+          console.log(`⚡ Modo economia ${enabled ? 'ATIVADO' : 'DESATIVADO'} para ${device.device_id}`);
+        }
+      });
+
+      res.json({
+        success: true,
+        message: `Modo economia ${enabled ? 'ativado' : 'desativado'}`,
+        power_save: enabled
+      });
+    }
+  );
 });
 
 // Reiniciar dispositivo (comando via WebSocket)
@@ -1239,10 +1281,10 @@ app.get('/api/devices/:deviceId/schedules', (req, res) => {
 
   console.log(`📅 ESP32 ${deviceId} buscando horários...`);
 
-  // Buscar dispositivo
-  db.get('SELECT id, user_id FROM devices WHERE device_id = ?', [deviceId], (err, device) => {
+  // Buscar dispositivo (incluindo power_save)
+  db.get('SELECT id, user_id, power_save FROM devices WHERE device_id = ?', [deviceId], (err, device) => {
     if (err || !device) {
-      return res.json({ success: true, data: [] });
+      return res.json({ success: true, data: [], power_save: false });
     }
 
     // Buscar horários do usuário dono do dispositivo
@@ -1281,8 +1323,12 @@ app.get('/api/devices/:deviceId/schedules', (req, res) => {
           };
         });
 
-        console.log(`   Enviando ${formatted.length} horários`);
-        res.json({ success: true, data: formatted });
+        console.log(`   Enviando ${formatted.length} horários (power_save: ${device.power_save ? 'ON' : 'OFF'})`);
+        res.json({
+          success: true,
+          data: formatted,
+          power_save: device.power_save === 1
+        });
       }
     );
   });

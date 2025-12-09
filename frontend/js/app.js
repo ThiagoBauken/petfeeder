@@ -546,6 +546,7 @@ function renderDevicesList() {
         const statusClass = isOnline ? 'success' : 'danger';
         const statusText = isOnline ? 'Online' : 'Offline';
         const statusIcon = isOnline ? 'fa-circle' : 'fa-exclamation-circle';
+        const powerSaveEnabled = device.power_save === 1 || device.power_save === true;
 
         return `
         <div class="card device-card ${!isOnline ? 'device-offline' : ''}">
@@ -567,7 +568,12 @@ function renderDevicesList() {
                     </p>
                     ${!isOnline ? '<p style="margin: 5px 0; color: #dc3545; font-size: 12px;"><i class="fas fa-exclamation-triangle"></i> Dispositivo pode estar desligado ou sem conexão</p>' : ''}
                 </div>
-                <div style="display: flex; gap: 10px;">
+                <div style="display: flex; gap: 10px; align-items: center;">
+                    <label class="power-save-toggle" title="Modo Economia: ESP32 entra em Deep Sleep entre alimentações">
+                        <input type="checkbox" ${powerSaveEnabled ? 'checked' : ''} onchange="togglePowerSave(${device.id}, this.checked)">
+                        <span class="toggle-slider"></span>
+                        <span class="toggle-label"><i class="fas fa-leaf"></i> Economia</span>
+                    </label>
                     <button class="btn btn-sm btn-primary" onclick="showEditDeviceModal(${device.id}, '${device.name}')">
                         <i class="fas fa-edit"></i> Editar
                     </button>
@@ -1004,6 +1010,30 @@ async function restartDevice(deviceId) {
     } catch (error) {
         console.error('Restart device error:', error);
         showToast(error.message || 'Erro ao reiniciar dispositivo', 'error');
+    }
+}
+
+// Toggle Power Save Mode
+async function togglePowerSave(deviceId, enabled) {
+    try {
+        const result = await api.updateDevicePowerSave(deviceId, enabled);
+        if (result.success) {
+            // Atualizar estado local
+            const device = state.devices.find(d => d.id === deviceId);
+            if (device) {
+                device.power_save = enabled ? 1 : 0;
+            }
+            showToast(enabled ? 'Modo Economia ativado' : 'Modo Economia desativado', 'success');
+        } else {
+            showToast(result.message || 'Erro ao alterar modo economia', 'error');
+            // Reverter checkbox
+            loadDevices();
+        }
+    } catch (error) {
+        console.error('Toggle power save error:', error);
+        showToast(error.message || 'Erro ao alterar modo economia', 'error');
+        // Reverter checkbox
+        loadDevices();
     }
 }
 

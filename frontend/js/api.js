@@ -192,6 +192,10 @@ class APIClient {
     return this.request('POST', `/devices/${deviceId}/restart`);
   }
 
+  async updateDevicePowerSave(deviceId, enabled) {
+    return this.request('PUT', `/devices/${deviceId}/power-save`, { enabled });
+  }
+
   // ====================
   // PETS ENDPOINTS
   // ====================

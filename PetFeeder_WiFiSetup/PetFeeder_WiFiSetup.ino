@@ -1,23 +1,27 @@
 /*
- * PETFEEDER ESP32 - WIFI SETUP + DEEP SLEEP INTELIGENTE
+ * PETFEEDER ESP32 - WIFI SETUP + MODO ECONOMIA CONTROLAVEL
  *
  * FUNCIONALIDADES:
  * - Configura WiFi + Email pelo celular (captive portal)
  * - Auto-registra no servidor usando email
  * - SEM horarios = fica acordado (polling 30s)
- * - COM horarios = ativa Deep Sleep economico
+ * - COM horarios + Economia ON = ativa Deep Sleep economico
+ * - COM horarios + Economia OFF = fica acordado (recebe comandos instantaneos)
  * - Funciona offline apos configurado
+ * - Toggle de Modo Economia controlavel pelo site!
  *
  * FLUXO:
  * 1. Liga -> Cria rede "PetFeeder-Setup" (senha: 12345678)
  * 2. Configura WiFi + Email
  * 3. Registra automaticamente na conta
  * 4. Aguarda configuracao de horarios no site
- * 5. Quando tiver horarios -> ativa Deep Sleep
+ * 5. Quando tiver horarios:
+ *    - Se Modo Economia ATIVADO -> Deep Sleep (economiza bateria)
+ *    - Se Modo Economia DESATIVADO -> Fica acordado (comandos instantaneos)
  *
  * PINOS:
  * Motor: GPIO 16, 17, 18, 19 (28BYJ-48)
- * Sensor: TRIG=23, ECHO=22 (HC-SR04)
+ * Sensor: TRIG=26, ECHO=25 (HC-SR04)
  * LED: GPIO 2
  * Botao Reset: GPIO 0 (BOOT)
  */
@@ -82,6 +86,7 @@ String userEmail = "";
 bool configMode = false;
 bool wifiConnected = false;
 bool waitingForSchedules = false;  // Aguardando config de horarios
+bool powerSaveEnabled = true;      // Modo economia (Deep Sleep) - controlado pelo site
 int currentStep = 0;
 
 // Contadores RTC (sobrevivem ao Deep Sleep)
@@ -385,6 +390,12 @@ bool fetchSchedules() {
     if (!error && doc["success"]) {
       JsonArray data = doc["data"];
       scheduleCount = 0;
+
+      // Ler configuracao de power_save do servidor
+      if (doc.containsKey("power_save")) {
+        powerSaveEnabled = doc["power_save"].as<bool>();
+        Serial.printf("[CONFIG] Modo Economia: %s\n", powerSaveEnabled ? "ATIVADO" : "DESATIVADO");
+      }
 
       for (JsonObject item : data) {
         if (scheduleCount >= 10) break;
@@ -774,8 +785,75 @@ void startConfigMode() {
   webServer.begin();
 }
 
+// Modo ativo: com horarios mas SEM Deep Sleep (power_save = false)
+bool activeMode = false;
+unsigned long lastScheduleCheck = 0;
+#define SCHEDULE_CHECK_INTERVAL_MS 60000  // Verificar horarios a cada 1 min
+
+void startActiveMode() {
+  activeMode = true;
+  waitingForSchedules = false;
+  Serial.println("\n========================================");
+  Serial.println("    MODO ATIVO (SEM DEEP SLEEP)");
+  Serial.println("========================================");
+  Serial.println("Modo economia DESATIVADO pelo site");
+  Serial.printf("IP local: http://%s\n", WiFi.localIP().toString().c_str());
+  Serial.println("Verificando comandos a cada 30s");
+  Serial.println("Verificando horarios a cada 1min");
+  Serial.println("========================================\n");
+
+  // Servidor local
+  webServer.on("/", []() {
+    float level = readFoodLevel();
+    String html = R"rawliteral(
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PetFeeder</title>
+  <style>
+    *{box-sizing:border-box;font-family:Arial}
+    body{margin:0;padding:20px;background:#f5f5f5;min-height:100vh}
+    .card{background:#fff;border-radius:15px;padding:25px;max-width:400px;margin:0 auto;box-shadow:0 2px 10px rgba(0,0,0,.1)}
+    h1{text-align:center;color:#333}
+    .status{background:#d4edda;padding:15px;border-radius:10px;margin:20px 0;text-align:center;color:#155724}
+    .btn{display:block;width:100%;padding:15px;margin:10px 0;border:none;border-radius:10px;font-size:16px;cursor:pointer;color:#fff}
+    .btn-med{background:#4CAF50}
+    .btn-sm{background:#8BC34A}
+    .btn-lg{background:#FF9800}
+    .info{font-size:13px;color:#666;text-align:center;margin-top:20px}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>PetFeeder )rawliteral" + deviceId + R"rawliteral(</h1>
+    <div class="status">
+      <strong>Modo Ativo</strong><br>
+      )rawliteral" + String(scheduleCount) + R"rawliteral( horarios configurados
+    </div>
+    <button class="btn btn-med" onclick="feed('medium')">Alimentar (Media)</button>
+    <button class="btn btn-sm" onclick="feed('small')">Porcao Pequena</button>
+    <button class="btn btn-lg" onclick="feed('large')">Porcao Grande</button>
+    <p class="info">Nivel: )rawliteral" + String((int)level) + R"rawliteral(%</p>
+  </div>
+  <script>
+  function feed(s){fetch('/feed?size='+s).then(function(r){return r.json();}).then(function(d){alert('Alimentando!');}).catch(function(e){alert('Erro');});}
+  </script>
+</body>
+</html>
+)rawliteral";
+    webServer.send(200, "text/html", html);
+  });
+
+  webServer.on("/feed", handleFeed);
+  webServer.on("/status", handleLocalStatus);
+  webServer.begin();
+}
+
 void startWaitingMode() {
   waitingForSchedules = true;
+  activeMode = false;
   Serial.println("\n========================================");
   Serial.println("    AGUARDANDO CONFIGURACAO");
   Serial.println("========================================");
@@ -972,11 +1050,15 @@ void handleNormalBoot() {
   // Verifica comandos
   checkCommands();
 
-  // Decide: Deep Sleep ou aguardar configuracao
-  if (scheduleCount > 0) {
+  // Decide: Deep Sleep ou polling continuo
+  if (scheduleCount > 0 && powerSaveEnabled) {
     Serial.println("\n[OK] Horarios configurados!");
-    Serial.println("[SLEEP] Ativando modo economia...");
+    Serial.println("[SLEEP] Ativando modo economia (Deep Sleep)...");
     scheduleNextWakeup();
+  } else if (scheduleCount > 0 && !powerSaveEnabled) {
+    Serial.println("\n[OK] Horarios configurados!");
+    Serial.println("[ATIVO] Modo economia DESATIVADO - polling continuo");
+    startActiveMode();
   } else {
     Serial.println("\n[AGUARDANDO] Sem horarios");
     startWaitingMode();
@@ -1018,13 +1100,59 @@ void loop() {
       if (fetchSchedules() && scheduleCount > 0) {
         Serial.println("[OK] Horarios encontrados!");
         waitingForSchedules = false;
-        scheduleNextWakeup();
+
+        // Decide baseado no power_save
+        if (powerSaveEnabled) {
+          scheduleNextWakeup();
+        } else {
+          startActiveMode();
+        }
+        return;
       } else {
         Serial.println("[AGUARDANDO] Configure os horarios pelo site");
       }
 
       sendStatus();
       checkCommands();
+    }
+    return;
+  }
+
+  // Modo ativo (power_save = false): polling continuo + verifica horarios
+  if (activeMode) {
+    webServer.handleClient();
+
+    // LED aceso fixo indica modo ativo
+    digitalWrite(LED_PIN, HIGH);
+
+    // Verifica horarios a cada minuto
+    if (millis() - lastScheduleCheck > SCHEDULE_CHECK_INTERVAL_MS) {
+      lastScheduleCheck = millis();
+      checkScheduledFeeding();
+    }
+
+    // Polling de comandos e sync a cada 30s
+    if (millis() - lastPollTime > POLL_INTERVAL_MS) {
+      lastPollTime = millis();
+
+      checkCommands();
+
+      // Sync periodico (a cada 5 min)
+      static int pollCount = 0;
+      pollCount++;
+      if (pollCount >= 10) {  // 10 * 30s = 5 min
+        pollCount = 0;
+        fetchSchedules();
+        sendStatus();
+
+        // Se power_save foi ativado no site, muda para Deep Sleep
+        if (powerSaveEnabled) {
+          Serial.println("[CONFIG] Modo economia ativado! Mudando para Deep Sleep...");
+          activeMode = false;
+          scheduleNextWakeup();
+          return;
+        }
+      }
     }
     return;
   }

@@ -1327,3 +1327,65 @@ tr:hover {
     padding: 8px 12px !important;
     min-width: auto !important;
 }
+
+/* Power Save Toggle */
+.power-save-toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    padding: 6px 12px;
+    background: #f8f9fa;
+    border-radius: 20px;
+    border: 1px solid #e9ecef;
+    transition: all 0.3s ease;
+}
+
+.power-save-toggle:hover {
+    background: #e9ecef;
+}
+
+.power-save-toggle input[type="checkbox"] {
+    display: none;
+}
+
+.toggle-slider {
+    width: 40px;
+    height: 22px;
+    background: #ccc;
+    border-radius: 11px;
+    position: relative;
+    transition: background 0.3s ease;
+}
+
+.toggle-slider::after {
+    content: '';
+    position: absolute;
+    width: 18px;
+    height: 18px;
+    background: white;
+    border-radius: 50%;
+    top: 2px;
+    left: 2px;
+    transition: transform 0.3s ease;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+}
+
+.power-save-toggle input:checked + .toggle-slider {
+    background: #28a745;
+}
+
+.power-save-toggle input:checked + .toggle-slider::after {
+    transform: translateX(18px);
+}
+
+.toggle-label {
+    font-size: 12px;
+    color: #666;
+    white-space: nowrap;
+}
+
+.power-save-toggle input:checked ~ .toggle-label {
+    color: #28a745;
+    font-weight: 500;
+}
