@@ -1185,9 +1185,16 @@ function showAddScheduleModal() {
     updatePetSelects();
     // Reset form
     document.getElementById('schedulePetSelect').value = '';
-    document.getElementById('schedulePetInfo').style.display = 'none';
-    document.getElementById('scheduleTime').value = '';
-    document.querySelector('input[name="scheduleDose"][value="medium"]').checked = true;
+    const petInfo = document.getElementById('schedulePetInfo');
+    if (petInfo) petInfo.style.display = 'none';
+
+    // Reset time inputs
+    resetTimeInputs();
+
+    // Reset dose to medium
+    const mediumDose = document.querySelector('input[name="scheduleDose"][value="medium"]');
+    if (mediumDose) mediumDose.checked = true;
+
     // Reset all days to checked
     ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'].forEach(day => {
         const checkbox = document.getElementById(`day_${day}`);
