@@ -70,6 +70,15 @@ String savedSSID = "";
 String savedPassword = "";
 String deviceId = "";
 
+// Gera ID unico baseado no MAC Address
+String getDeviceId() {
+  uint8_t mac[6];
+  WiFi.macAddress(mac);
+  char id[18];
+  sprintf(id, "PF_%02X%02X%02X", mac[3], mac[4], mac[5]);
+  return String(id);
+}
+
 bool configMode = false;
 bool wifiConnected = false;
 int currentStep = 0;
@@ -317,6 +326,7 @@ bool connectWiFi() {
 // ==================== CAPTIVE PORTAL ====================
 
 void handleRoot() {
+  String devId = getDeviceId();
   String html = R"rawliteral(
 <!DOCTYPE html>
 <html>
@@ -329,7 +339,7 @@ void handleRoot() {
     body{font-family:Arial,sans-serif;background:linear-gradient(135deg,#667eea,#764ba2);min-height:100vh;padding:20px}
     .container{max-width:400px;margin:0 auto;background:#fff;border-radius:20px;padding:30px;box-shadow:0 20px 60px rgba(0,0,0,.3)}
     h1{text-align:center;color:#333;margin-bottom:10px}
-    .subtitle{text-align:center;color:#666;margin-bottom:30px}
+    .subtitle{text-align:center;color:#666;margin-bottom:20px}
     .icon{text-align:center;font-size:60px;margin-bottom:20px}
     label{display:block;margin-bottom:5px;color:#333;font-weight:500}
     input{width:100%;padding:15px;margin-bottom:20px;border:2px solid #eee;border-radius:10px;font-size:16px}
@@ -344,6 +354,11 @@ void handleRoot() {
     .spinner{border:3px solid #f3f3f3;border-top:3px solid #667eea;border-radius:50%;width:30px;height:30px;animation:spin 1s linear infinite;margin:0 auto 10px}
     @keyframes spin{0%{transform:rotate(0deg)}100%{transform:rotate(360deg)}}
     .success{background:#4CAF50;color:#fff;padding:20px;border-radius:10px;text-align:center}
+    .device-id-box{background:linear-gradient(135deg,#667eea,#764ba2);color:#fff;padding:20px;border-radius:15px;text-align:center;margin-bottom:25px}
+    .device-id-box h3{margin-bottom:5px;font-size:14px;opacity:0.9}
+    .device-id-box .id{font-size:28px;font-weight:bold;font-family:monospace;letter-spacing:2px}
+    .device-id-box p{font-size:12px;margin-top:10px;opacity:0.8}
+    .copy-btn{background:rgba(255,255,255,0.2);border:none;color:#fff;padding:8px 15px;border-radius:5px;margin-top:10px;cursor:pointer}
   </style>
 </head>
 <body>
@@ -351,17 +366,24 @@ void handleRoot() {
     <div class="icon">&#128062;</div>
     <h1>PetFeeder Setup</h1>
     <p class="subtitle">Configure seu alimentador</p>
+
+    <div class="device-id-box">
+      <h3>ID DO DISPOSITIVO</h3>
+      <div class="id" id="deviceIdDisplay">)rawliteral" + devId + R"rawliteral(</div>
+      <p>Use este ID no site para vincular</p>
+      <button class="copy-btn" onclick="copyId()">Copiar ID</button>
+    </div>
+
     <div id="form">
       <button class="scan-btn" onclick="scanNetworks()">Buscar Redes WiFi</button>
       <div id="networks" class="networks"></div>
       <form id="configForm" onsubmit="saveConfig(event)">
         <label>Rede WiFi</label>
-        <input type="text" id="ssid" placeholder="Nome da rede" required>
+        <input type="text" id="ssid" placeholder="Selecione acima ou digite" required>
         <label>Senha WiFi</label>
         <input type="password" id="password" placeholder="Senha da rede" required>
-        <label>Device ID (do site PetFeeder)</label>
-        <input type="text" id="deviceId" placeholder="Ex: abc123" required>
-        <button type="submit">Salvar e Conectar</button>
+        <input type="hidden" id="deviceId" value=")rawliteral" + devId + R"rawliteral(">
+        <button type="submit">Conectar</button>
       </form>
     </div>
     <div id="loading" class="loading" style="display:none">
@@ -371,9 +393,15 @@ void handleRoot() {
     <div id="success" class="success" style="display:none">
       <h2>Configurado!</h2>
       <p>O ESP32 vai reiniciar e conectar ao WiFi.</p>
+      <p style="margin-top:10px;font-size:14px">Agora va ao site e vincule o dispositivo com o ID:</p>
+      <p style="font-size:20px;font-weight:bold;margin-top:5px">)rawliteral" + devId + R"rawliteral(</p>
     </div>
   </div>
   <script>
+    function copyId(){
+      navigator.clipboard.writeText(')rawliteral" + devId + R"rawliteral(');
+      alert('ID copiado!');
+    }
     function scanNetworks(){
       document.getElementById('networks').innerHTML='<div class="loading"><div class="spinner"></div><p>Buscando...</p></div>';
       fetch('/scan').then(r=>r.json()).then(data=>{
