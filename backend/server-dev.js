@@ -899,6 +899,61 @@ app.get('/api/devices/:deviceId/status', authMiddleware, (req, res) => {
   res.json(status);
 });
 
+// ESP32 busca horários agendados (ROTA PÚBLICA - sem auth)
+app.get('/api/devices/:deviceId/schedules', (req, res) => {
+  const deviceId = req.params.deviceId;
+
+  console.log(`📅 ESP32 ${deviceId} buscando horários...`);
+
+  // Buscar dispositivo
+  db.get('SELECT id, user_id FROM devices WHERE device_id = ?', [deviceId], (err, device) => {
+    if (err || !device) {
+      return res.json({ success: true, data: [] });
+    }
+
+    // Buscar horários do usuário dono do dispositivo
+    db.all(
+      `SELECT s.hour, s.minute, s.amount, s.days, s.active
+       FROM schedules s
+       JOIN pets p ON s.pet_id = p.id
+       WHERE p.user_id = ? AND s.active = 1`,
+      [device.user_id],
+      (err, schedules) => {
+        if (err) {
+          return res.json({ success: true, data: [] });
+        }
+
+        // Formatar para o ESP32
+        const formatted = (schedules || []).map(s => {
+          // Converter amount para size
+          let size = 'medium';
+          if (s.amount <= 50) size = 'small';
+          else if (s.amount >= 150) size = 'large';
+
+          // Parse days
+          let days = [];
+          try {
+            days = JSON.parse(s.days);
+          } catch (e) {
+            days = [0, 1, 2, 3, 4, 5, 6]; // Todos os dias
+          }
+
+          return {
+            hour: s.hour,
+            minute: s.minute,
+            size: size,
+            days: days,
+            active: s.active === 1
+          };
+        });
+
+        console.log(`   Enviando ${formatted.length} horários`);
+        res.json({ success: true, data: formatted });
+      }
+    );
+  });
+});
+
 // ========================================
 // INICIALIZAÇÃO
 // ========================================
