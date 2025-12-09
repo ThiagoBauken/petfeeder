@@ -29,10 +29,13 @@ RUN echo 'server { \
     location /ws { proxy_pass http://127.0.0.1:8081; proxy_http_version 1.1; proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade"; proxy_set_header Host $host; } \
 }' > /etc/nginx/http.d/default.conf
 
+# Environment
+ENV NODE_ENV=production
+
 # Create start script
 RUN echo '#!/bin/sh' > /start.sh && \
     echo 'nginx' >> /start.sh && \
-    echo 'node server-dev.js' >> /start.sh && \
+    echo 'NODE_ENV=production node server-dev.js' >> /start.sh && \
     chmod +x /start.sh
 
 # Create data directory

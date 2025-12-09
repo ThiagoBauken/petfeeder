@@ -28,22 +28,26 @@ const JWT_SECRET = 'dev_secret_min_32_caracteres_para_jwt_token';
 const JWT_REFRESH_SECRET = 'dev_refresh_secret_min_32_caracteres_token';
 
 // ========================================
-// BANCO DE DADOS SQLite (em memória)
+// BANCO DE DADOS SQLite
 // ========================================
 
-const db = new sqlite3.Database(':memory:', (err) => {
+// Em produção usa arquivo persistente, em dev usa memória
+const IS_PRODUCTION = process.env.NODE_ENV === 'production';
+const DB_PATH = IS_PRODUCTION ? '/app/data/petfeeder.db' : ':memory:';
+
+const db = new sqlite3.Database(DB_PATH, (err) => {
   if (err) {
     console.error('❌ Erro ao criar banco:', err);
     process.exit(1);
   }
-  console.log('✅ Banco SQLite criado em memória');
+  console.log(`✅ Banco SQLite: ${IS_PRODUCTION ? 'arquivo persistente' : 'memória (dev)'}`);
 });
 
-// Criar tabelas
+// Criar tabelas (IF NOT EXISTS para produção)
 db.serialize(() => {
   // Users
   db.run(`
-    CREATE TABLE users (
+    CREATE TABLE IF NOT EXISTS users (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL,
       email TEXT UNIQUE NOT NULL,
@@ -54,7 +58,7 @@ db.serialize(() => {
 
   // Devices
   db.run(`
-    CREATE TABLE devices (
+    CREATE TABLE IF NOT EXISTS devices (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id INTEGER NOT NULL,
       device_id TEXT UNIQUE NOT NULL,
@@ -67,7 +71,7 @@ db.serialize(() => {
 
   // Pets
   db.run(`
-    CREATE TABLE pets (
+    CREATE TABLE IF NOT EXISTS pets (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id INTEGER NOT NULL,
       device_id INTEGER NOT NULL,
@@ -83,7 +87,7 @@ db.serialize(() => {
 
   // Feeding history
   db.run(`
-    CREATE TABLE feeding_history (
+    CREATE TABLE IF NOT EXISTS feeding_history (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       pet_id INTEGER NOT NULL,
       device_id INTEGER NOT NULL,
@@ -97,7 +101,7 @@ db.serialize(() => {
 
   // Schedules
   db.run(`
-    CREATE TABLE schedules (
+    CREATE TABLE IF NOT EXISTS schedules (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       pet_id INTEGER NOT NULL,
       device_id INTEGER NOT NULL,
@@ -112,7 +116,7 @@ db.serialize(() => {
     )
   `);
 
-  console.log('✅ Tabelas criadas');
+  console.log('✅ Tabelas verificadas/criadas');
 });
 
 // ========================================
