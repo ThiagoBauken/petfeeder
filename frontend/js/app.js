@@ -463,6 +463,11 @@ function renderSchedulesList() {
         if (schedule.saturday) weekdays.push('Sáb');
         if (schedule.sunday) weekdays.push('Dom');
 
+        // Determinar tamanho da dose
+        const doseSize = getDoseSizeFromAmount(schedule.amount);
+        const doseLabel = doseSize === 'small' ? 'Pequena' : doseSize === 'large' ? 'Grande' : 'Média';
+        const doseIcon = doseSize === 'small' ? '🥄' : doseSize === 'large' ? '🍽️' : '🥣';
+
         return `
             <div class="card">
                 <div style="display: flex; justify-content: space-between; align-items: center;">
@@ -474,7 +479,7 @@ function renderSchedulesList() {
                             </span>
                         </h3>
                         <p style="margin: 5px 0; color: #666;">
-                            ${schedule.pet_name} • ${schedule.amount}g • ${weekdays.join(', ')}
+                            ${schedule.pet_name} • ${doseIcon} ${doseLabel} (${schedule.amount}g) • ${weekdays.join(', ')}
                         </p>
                     </div>
                     <div style="display: flex; gap: 10px;">
@@ -622,6 +627,13 @@ const DOSE_CONFIG = {
     medium: { grams: 100, steps: 4096, voltas: 2, name: 'Média' },
     large: { grams: 150, steps: 6144, voltas: 3, name: 'Grande' }
 };
+
+// Converter gramas para tamanho de dose
+function getDoseSizeFromAmount(amount) {
+    if (amount <= 50) return 'small';
+    if (amount <= 100) return 'medium';
+    return 'large';
+}
 
 // Update pet info when selecting pet in Feed modal
 function updateFeedPetInfo() {
@@ -801,6 +813,12 @@ function addTimeInput() {
     row.className = 'time-input-row';
     row.innerHTML = `
         <input type="time" class="schedule-time-input" required>
+        <select class="schedule-dose-select">
+            <option value="">Usar global</option>
+            <option value="small">🥄 Pequena (50g)</option>
+            <option value="medium">🥣 Média (100g)</option>
+            <option value="large">🍽️ Grande (150g)</option>
+        </select>
         <button type="button" class="btn btn-sm btn-danger remove-time-btn" onclick="removeTimeInput(this)">
             <i class="fas fa-times"></i>
         </button>
@@ -839,23 +857,32 @@ function resetTimeInputs() {
 
 async function addSchedule() {
     const petId = parseInt(document.getElementById('schedulePetSelect').value);
-    const timeInputs = document.querySelectorAll('.schedule-time-input');
-    const doseSize = document.querySelector('input[name="scheduleDose"]:checked')?.value || 'medium';
+    const timeRows = document.querySelectorAll('.time-input-row');
+    const globalDoseSize = document.querySelector('input[name="scheduleDose"]:checked')?.value || 'medium';
 
     if (!petId) {
         showToast('Selecione um pet', 'error');
         return;
     }
 
-    // Coleta todos os horários válidos
-    const times = [];
-    timeInputs.forEach(input => {
-        if (input.value) {
-            times.push(input.value);
+    // Coleta todos os horários válidos com suas doses individuais
+    const scheduleItems = [];
+    timeRows.forEach(row => {
+        const timeInput = row.querySelector('.schedule-time-input');
+        const doseSelect = row.querySelector('.schedule-dose-select');
+
+        if (timeInput && timeInput.value) {
+            const individualDose = doseSelect?.value || '';
+            const effectiveDoseSize = individualDose || globalDoseSize;
+            scheduleItems.push({
+                time: timeInput.value,
+                doseSize: effectiveDoseSize,
+                grams: DOSE_CONFIG[effectiveDoseSize].grams
+            });
         }
     });
 
-    if (times.length === 0) {
+    if (scheduleItems.length === 0) {
         showToast('Defina pelo menos um horário', 'error');
         return;
     }
@@ -866,7 +893,6 @@ async function addSchedule() {
         return;
     }
 
-    const dose = DOSE_CONFIG[doseSize];
     const deviceId = pet.device_id;
 
     // Get weekday selection
@@ -884,9 +910,9 @@ async function addSchedule() {
         let successCount = 0;
         let errorMessages = [];
 
-        // Cria um schedule para cada horário
-        for (const timeValue of times) {
-            const [hour, minute] = timeValue.split(':').map(Number);
+        // Cria um schedule para cada horário (com sua dose individual ou global)
+        for (const item of scheduleItems) {
+            const [hour, minute] = item.time.split(':').map(Number);
 
             try {
                 const result = await api.createSchedule({
@@ -894,17 +920,17 @@ async function addSchedule() {
                     petId,
                     hour,
                     minute,
-                    amount: dose.grams,
+                    amount: item.grams,
                     days: weekdays,
                 });
 
                 if (result.success) {
                     successCount++;
                 } else {
-                    errorMessages.push(result.error || `Erro às ${timeValue}`);
+                    errorMessages.push(result.error || `Erro às ${item.time}`);
                 }
             } catch (err) {
-                errorMessages.push(err.message || `Erro às ${timeValue}`);
+                errorMessages.push(err.message || `Erro às ${item.time}`);
             }
         }
 

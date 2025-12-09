@@ -388,6 +388,12 @@
                 <div id="scheduleTimesList">
                     <div class="time-input-row">
                         <input type="time" class="schedule-time-input" required>
+                        <select class="schedule-dose-select">
+                            <option value="">Usar global</option>
+                            <option value="small">🥄 Pequena (50g)</option>
+                            <option value="medium">🥣 Média (100g)</option>
+                            <option value="large">🍽️ Grande (150g)</option>
+                        </select>
                         <button type="button" class="btn btn-sm btn-danger remove-time-btn" onclick="removeTimeInput(this)" style="display:none;">
                             <i class="fas fa-times"></i>
                         </button>
@@ -396,11 +402,11 @@
                 <button type="button" class="btn btn-sm btn-secondary" onclick="addTimeInput()" style="margin-top: 8px;">
                     <i class="fas fa-plus"></i> Adicionar outro horário
                 </button>
-                <div class="help-text">Adicione quantos horários quiser</div>
+                <div class="help-text">Adicione quantos horários quiser. Cada um pode ter dose diferente ou usar a global abaixo.</div>
             </div>
 
             <div class="form-group">
-                <label>Tamanho da Dose:</label>
+                <label>Dose Global (para horários sem dose individual):</label>
                 <div class="dose-selector">
                     <label class="dose-option">
                         <input type="radio" name="scheduleDose" value="small">
