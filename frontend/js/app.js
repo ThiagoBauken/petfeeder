@@ -559,6 +559,9 @@ function renderDevicesList() {
                     </p>
                 </div>
                 <div style="display: flex; gap: 10px;">
+                    <button class="btn btn-sm btn-primary" onclick="showEditDeviceModal(${device.id}, '${device.name}')">
+                        <i class="fas fa-edit"></i> Editar
+                    </button>
                     <button class="btn btn-sm btn-secondary" onclick="restartDevice(${device.id})">
                         <i class="fas fa-sync"></i> Reiniciar
                     </button>
@@ -875,6 +878,37 @@ async function restartDevice(deviceId) {
     } catch (error) {
         console.error('Restart device error:', error);
         showToast(error.message || 'Erro ao reiniciar dispositivo', 'error');
+    }
+}
+
+// Edit Device
+function showEditDeviceModal(deviceId, deviceName) {
+    document.getElementById('editDeviceId').value = deviceId;
+    document.getElementById('editDeviceName').value = deviceName;
+    showModal('editDeviceModal');
+}
+
+async function saveDeviceEdit() {
+    const deviceId = document.getElementById('editDeviceId').value;
+    const name = document.getElementById('editDeviceName').value.trim();
+
+    if (!name) {
+        showToast('Digite um nome para o dispositivo', 'error');
+        return;
+    }
+
+    try {
+        const result = await api.updateDevice(deviceId, { name });
+        if (result.success) {
+            showToast('Dispositivo atualizado!', 'success');
+            closeAllModals();
+            await loadDevices();
+        } else {
+            showToast(result.message || 'Erro ao atualizar dispositivo', 'error');
+        }
+    } catch (error) {
+        console.error('Edit device error:', error);
+        showToast(error.message || 'Erro ao atualizar dispositivo', 'error');
     }
 }
 

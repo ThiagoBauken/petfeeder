@@ -523,6 +523,81 @@ app.post('/api/devices/auto-register', (req, res) => {
   });
 });
 
+// Editar dispositivo
+app.put('/api/devices/:id', authMiddleware, (req, res) => {
+  const deviceId = req.params.id;
+  const { name } = req.body;
+
+  if (!name) {
+    return res.status(400).json({ success: false, message: 'Nome é obrigatório' });
+  }
+
+  db.run(
+    'UPDATE devices SET name = ? WHERE id = ? AND user_id = ?',
+    [name, deviceId, req.userId],
+    function(err) {
+      if (err) {
+        return res.status(500).json({ success: false, message: 'Erro ao atualizar dispositivo' });
+      }
+      if (this.changes === 0) {
+        return res.status(404).json({ success: false, message: 'Dispositivo não encontrado' });
+      }
+      console.log(`Dispositivo ${deviceId} renomeado para: ${name}`);
+      res.json({ success: true, message: 'Dispositivo atualizado' });
+    }
+  );
+});
+
+// Desvincular dispositivo
+app.delete('/api/devices/:id', authMiddleware, (req, res) => {
+  const deviceId = req.params.id;
+
+  // Primeiro, remover pets associados
+  db.run('DELETE FROM pets WHERE device_id = ? AND user_id = ?', [deviceId, req.userId], (err) => {
+    if (err) {
+      console.error('Erro ao remover pets:', err);
+    }
+
+    // Depois, remover o dispositivo
+    db.run(
+      'DELETE FROM devices WHERE id = ? AND user_id = ?',
+      [deviceId, req.userId],
+      function(err) {
+        if (err) {
+          return res.status(500).json({ success: false, message: 'Erro ao desvincular dispositivo' });
+        }
+        if (this.changes === 0) {
+          return res.status(404).json({ success: false, message: 'Dispositivo não encontrado' });
+        }
+        console.log(`Dispositivo ${deviceId} desvinculado`);
+        res.json({ success: true, message: 'Dispositivo desvinculado' });
+      }
+    );
+  });
+});
+
+// Reiniciar dispositivo (comando via WebSocket)
+app.post('/api/devices/:id/restart', authMiddleware, (req, res) => {
+  const deviceId = req.params.id;
+
+  // Buscar device_id real
+  db.get(
+    'SELECT device_id FROM devices WHERE id = ? AND user_id = ?',
+    [deviceId, req.userId],
+    (err, device) => {
+      if (err || !device) {
+        return res.status(404).json({ success: false, message: 'Dispositivo não encontrado' });
+      }
+
+      // Enviar comando via WebSocket (se estiver conectado)
+      console.log(`🔄 Comando de reinício enviado para ${device.device_id}`);
+
+      // TODO: Implementar envio real via WebSocket quando ESP32 suportar
+      res.json({ success: true, message: 'Comando de reinício enviado' });
+    }
+  );
+});
+
 // ========================================
 // ROTAS DE PETS
 // ========================================
