@@ -1,13 +1,16 @@
-# PetFeeder SaaS - Backend Dockerfile
-# Build stage
-FROM node:18-alpine AS builder
+# PetFeeder SaaS - Backend Dockerfile (SQLite interno)
+FROM node:18-alpine
 
-# Install build dependencies for native modules
-RUN apk add --no-cache python3 make g++
+# Install build dependencies for native modules (sqlite3)
+RUN apk add --no-cache python3 make g++ dumb-init
+
+# Create non-root user
+RUN addgroup -g 1001 -S nodejs && \
+    adduser -S nodejs -u 1001
 
 WORKDIR /app
 
-# Copy package files from backend
+# Copy package files
 COPY backend/package*.json ./
 
 # Install dependencies
@@ -16,24 +19,9 @@ RUN npm ci && npm cache clean --force
 # Copy backend source code
 COPY backend/ .
 
-# Production stage
-FROM node:18-alpine
-
-# Install dumb-init for proper signal handling
-RUN apk add --no-cache dumb-init
-
-# Create non-root user
-RUN addgroup -g 1001 -S nodejs && \
-    adduser -S nodejs -u 1001
-
-WORKDIR /app
-
-# Copy from builder
-COPY --from=builder --chown=nodejs:nodejs /app/node_modules ./node_modules
-COPY --from=builder --chown=nodejs:nodejs /app .
-
 # Create necessary directories
-RUN mkdir -p /app/logs /app/uploads && chown -R nodejs:nodejs /app
+RUN mkdir -p /app/logs /app/uploads /app/data && \
+    chown -R nodejs:nodejs /app
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
@@ -42,11 +30,11 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
 # Switch to non-root user
 USER nodejs
 
-# Expose ports
+# Expose port
 EXPOSE 3000
 
-# Use dumb-init to handle signals properly
+# Use dumb-init for proper signal handling
 ENTRYPOINT ["dumb-init", "--"]
 
-# Start application
-CMD ["node", "server.js"]
+# Start application (usando server-dev.js com SQLite)
+CMD ["node", "server-dev.js"]
