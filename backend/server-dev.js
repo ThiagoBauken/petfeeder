@@ -973,7 +973,7 @@ app.post('/api/schedules', authMiddleware, (req, res) => {
   const { petId, deviceId, hour, minute, amount, days } = req.body;
 
   if (petId === undefined || deviceId === undefined || hour === undefined || minute === undefined || !amount || !days) {
-    return res.status(400).json({ error: 'Dados incompletos' });
+    return res.status(400).json({ success: false, error: 'Dados incompletos' });
   }
 
   // Verificar se pet pertence ao usuário
@@ -982,32 +982,50 @@ app.post('/api/schedules', authMiddleware, (req, res) => {
     [petId, req.userId],
     (err, pet) => {
       if (err || !pet) {
-        return res.status(404).json({ error: 'Pet não encontrado' });
+        return res.status(404).json({ success: false, error: 'Pet não encontrado' });
       }
 
-      db.run(
-        'INSERT INTO schedules (pet_id, device_id, hour, minute, amount, days) VALUES (?, ?, ?, ?, ?, ?)',
-        [petId, deviceId, hour, minute, amount, JSON.stringify(days)],
-        function(err) {
-          if (err) {
-            console.error('[SCHEDULES] Erro ao criar:', err);
-            return res.status(500).json({ success: false, error: 'Erro ao criar horário' });
+      // Verificar se já existe horário duplicado para este pet
+      db.get(
+        'SELECT id FROM schedules WHERE pet_id = ? AND hour = ? AND minute = ?',
+        [petId, hour, minute],
+        (errDup, existing) => {
+          if (errDup) {
+            console.error('[SCHEDULES] Erro ao verificar duplicado:', errDup);
+          }
+          if (existing) {
+            console.log(`[SCHEDULES] Duplicado: ${hour}:${minute} já existe para pet ${petId}`);
+            return res.status(400).json({
+              success: false,
+              error: `Já existe um horário às ${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')} para este pet`
+            });
           }
 
-          console.log(`[SCHEDULES] Criado: ${hour}:${minute} para pet ${petId}`);
-          res.json({
-            success: true,
-            data: {
-              id: this.lastID,
-              pet_id: petId,
-              device_id: deviceId,
-              hour,
-              minute,
-              amount,
-              days,
-              active: true
+          db.run(
+            'INSERT INTO schedules (pet_id, device_id, hour, minute, amount, days) VALUES (?, ?, ?, ?, ?, ?)',
+            [petId, deviceId, hour, minute, amount, JSON.stringify(days)],
+            function(err) {
+              if (err) {
+                console.error('[SCHEDULES] Erro ao criar:', err);
+                return res.status(500).json({ success: false, error: 'Erro ao criar horário' });
+              }
+
+              console.log(`[SCHEDULES] Criado: ${hour}:${minute} para pet ${petId}`);
+              res.json({
+                success: true,
+                data: {
+                  id: this.lastID,
+                  pet_id: petId,
+                  device_id: deviceId,
+                  hour,
+                  minute,
+                  amount,
+                  days,
+                  active: true
+                }
+              });
             }
-          });
+          );
         }
       );
     }
