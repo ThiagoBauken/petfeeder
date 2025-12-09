@@ -1,0 +1,436 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login - PetFeeder SaaS</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .login-container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            overflow: hidden;
+            max-width: 400px;
+            width: 100%;
+        }
+
+        .login-header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 40px 30px;
+            text-align: center;
+        }
+
+        .login-header h1 {
+            font-size: 28px;
+            margin-bottom: 10px;
+        }
+
+        .login-header p {
+            opacity: 0.9;
+            font-size: 14px;
+        }
+
+        .login-body {
+            padding: 40px 30px;
+        }
+
+        .tab-buttons {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 30px;
+        }
+
+        .tab-btn {
+            flex: 1;
+            padding: 12px;
+            border: none;
+            background: #f5f5f5;
+            cursor: pointer;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            transition: all 0.3s;
+        }
+
+        .tab-btn.active {
+            background: #667eea;
+            color: white;
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: #333;
+            font-size: 14px;
+        }
+
+        .form-group input {
+            width: 100%;
+            padding: 12px 15px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 14px;
+            transition: all 0.3s;
+        }
+
+        .form-group input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .btn-primary {
+            width: 100%;
+            padding: 14px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            margin-top: 10px;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn-primary:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .alert {
+            padding: 12px 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-size: 14px;
+        }
+
+        .alert-error {
+            background: #fee;
+            color: #c33;
+            border: 1px solid #fcc;
+        }
+
+        .alert-success {
+            background: #efe;
+            color: #3c3;
+            border: 1px solid #cfc;
+        }
+
+        .alert-info {
+            background: #eef;
+            color: #33c;
+            border: 1px solid #ccf;
+        }
+
+        .loading {
+            display: inline-block;
+            width: 14px;
+            height: 14px;
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            border-top-color: white;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            margin-right: 8px;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .help-text {
+            font-size: 12px;
+            color: #666;
+            margin-top: 5px;
+        }
+
+        .link {
+            color: #667eea;
+            text-decoration: none;
+            font-weight: 600;
+        }
+
+        .link:hover {
+            text-decoration: underline;
+        }
+
+        .checkbox-group {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 15px;
+        }
+
+        .checkbox-group input[type="checkbox"] {
+            width: auto;
+        }
+
+        .checkbox-group label {
+            margin: 0;
+            font-weight: normal;
+            font-size: 14px;
+        }
+
+        .footer-text {
+            text-align: center;
+            margin-top: 20px;
+            font-size: 12px;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <div class="login-container">
+        <div class="login-header">
+            <h1><i class="fas fa-paw"></i> PetFeeder</h1>
+            <p>Sistema Inteligente de Alimentação para Pets</p>
+        </div>
+
+        <div class="login-body">
+            <!-- Alert Area -->
+            <div id="alertArea"></div>
+
+            <!-- Tabs -->
+            <div class="tab-buttons">
+                <button class="tab-btn active" onclick="switchTab('login')">Login</button>
+                <button class="tab-btn" onclick="switchTab('register')">Registrar</button>
+            </div>
+
+            <!-- Login Form -->
+            <div id="loginTab" class="tab-content active">
+                <form id="loginForm" onsubmit="handleLogin(event)">
+                    <div class="form-group">
+                        <label for="loginEmail">Email</label>
+                        <input type="email" id="loginEmail" required placeholder="seu@email.com">
+                    </div>
+
+                    <div class="form-group">
+                        <label for="loginPassword">Senha</label>
+                        <input type="password" id="loginPassword" required placeholder="••••••••">
+                    </div>
+
+                    <div id="twoFactorGroup" style="display: none;">
+                        <div class="form-group">
+                            <label for="totpToken">Código 2FA</label>
+                            <input type="text" id="totpToken" maxlength="6" placeholder="000000">
+                            <div class="help-text">Digite o código do seu aplicativo autenticador</div>
+                        </div>
+                    </div>
+
+                    <div class="checkbox-group">
+                        <input type="checkbox" id="rememberMe">
+                        <label for="rememberMe">Lembrar de mim</label>
+                    </div>
+
+                    <button type="submit" class="btn-primary" id="loginBtn">
+                        Entrar
+                    </button>
+                </form>
+            </div>
+
+            <!-- Register Form -->
+            <div id="registerTab" class="tab-content">
+                <form id="registerForm" onsubmit="handleRegister(event)">
+                    <div class="form-group">
+                        <label for="registerName">Nome Completo</label>
+                        <input type="text" id="registerName" required placeholder="Seu nome">
+                    </div>
+
+                    <div class="form-group">
+                        <label for="registerEmail">Email</label>
+                        <input type="email" id="registerEmail" required placeholder="seu@email.com">
+                    </div>
+
+                    <div class="form-group">
+                        <label for="registerPassword">Senha</label>
+                        <input type="password" id="registerPassword" required minlength="8" placeholder="Mínimo 8 caracteres">
+                        <div class="help-text">Mínimo 8 caracteres</div>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="registerPasswordConfirm">Confirmar Senha</label>
+                        <input type="password" id="registerPasswordConfirm" required placeholder="Confirme sua senha">
+                    </div>
+
+                    <div class="checkbox-group">
+                        <input type="checkbox" id="acceptTerms" required>
+                        <label for="acceptTerms">Aceito os <a href="#" class="link">termos de uso</a></label>
+                    </div>
+
+                    <button type="submit" class="btn-primary" id="registerBtn">
+                        Criar Conta
+                    </button>
+                </form>
+            </div>
+
+            <div class="footer-text">
+                PetFeeder SaaS &copy; 2024
+            </div>
+        </div>
+    </div>
+
+    <!-- Load Config and API -->
+    <script src="js/config.js"></script>
+    <script src="js/api.js"></script>
+
+    <script>
+        // Switch between tabs
+        function switchTab(tab) {
+            document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
+
+            if (tab === 'login') {
+                document.querySelector('.tab-btn:first-child').classList.add('active');
+                document.getElementById('loginTab').classList.add('active');
+            } else {
+                document.querySelector('.tab-btn:last-child').classList.add('active');
+                document.getElementById('registerTab').classList.add('active');
+            }
+
+            clearAlert();
+        }
+
+        // Show alert
+        function showAlert(message, type = 'info') {
+            const alertArea = document.getElementById('alertArea');
+            alertArea.innerHTML = `<div class="alert alert-${type}">${message}</div>`;
+        }
+
+        // Clear alert
+        function clearAlert() {
+            document.getElementById('alertArea').innerHTML = '';
+        }
+
+        // Handle login
+        let requires2FA = false;
+
+        async function handleLogin(e) {
+            e.preventDefault();
+
+            const email = document.getElementById('loginEmail').value;
+            const password = document.getElementById('loginPassword').value;
+            const totpToken = document.getElementById('totpToken').value || null;
+            const btn = document.getElementById('loginBtn');
+
+            // Disable button
+            btn.disabled = true;
+            btn.innerHTML = '<span class="loading"></span> Entrando...';
+            clearAlert();
+
+            try {
+                const result = await api.login(email, password, totpToken);
+
+                if (result.success) {
+                    showAlert('Login realizado com sucesso! Redirecionando...', 'success');
+
+                    setTimeout(() => {
+                        window.location.href = 'dashboard.html';
+                    }, 1000);
+                } else {
+                    if (result.requiresTwoFactor) {
+                        requires2FA = true;
+                        document.getElementById('twoFactorGroup').style.display = 'block';
+                        showAlert('Digite o código 2FA do seu aplicativo autenticador', 'info');
+                    } else {
+                        showAlert(result.message || 'Erro ao fazer login', 'error');
+                    }
+                }
+            } catch (error) {
+                console.error('Login error:', error);
+                showAlert(error.message || 'Erro ao conectar com o servidor', 'error');
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = 'Entrar';
+            }
+        }
+
+        // Handle register
+        async function handleRegister(e) {
+            e.preventDefault();
+
+            const name = document.getElementById('registerName').value;
+            const email = document.getElementById('registerEmail').value;
+            const password = document.getElementById('registerPassword').value;
+            const passwordConfirm = document.getElementById('registerPasswordConfirm').value;
+            const btn = document.getElementById('registerBtn');
+
+            // Validate passwords match
+            if (password !== passwordConfirm) {
+                showAlert('As senhas não coincidem', 'error');
+                return;
+            }
+
+            // Disable button
+            btn.disabled = true;
+            btn.innerHTML = '<span class="loading"></span> Criando conta...';
+            clearAlert();
+
+            try {
+                const result = await api.register(email, password, name, 'America/Sao_Paulo');
+
+                if (result.success) {
+                    showAlert('Conta criada com sucesso! Fazendo login...', 'success');
+
+                    // Auto-login after registration
+                    setTimeout(() => {
+                        window.location.href = 'dashboard.html';
+                    }, 1500);
+                } else {
+                    showAlert(result.message || 'Erro ao criar conta', 'error');
+                }
+            } catch (error) {
+                console.error('Registration error:', error);
+                showAlert(error.message || 'Erro ao conectar com o servidor', 'error');
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = 'Criar Conta';
+            }
+        }
+
+        // Check if already logged in
+        window.onload = function() {
+            const token = localStorage.getItem(CONFIG.STORAGE_KEYS.ACCESS_TOKEN);
+            if (token) {
+                // Already logged in, redirect to dashboard
+                window.location.href = 'dashboard.html';
+            }
+        };
+    </script>
+</body>
+</html>

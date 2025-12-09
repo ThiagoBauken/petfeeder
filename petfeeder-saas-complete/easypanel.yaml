@@ -1,0 +1,171 @@
+# EasyPanel Configuration
+# Deploy em: https://easypanel.io
+
+name: petfeeder-saas
+type: docker-compose
+domain: petfeeder.com.br
+
+services:
+  # PostgreSQL Database
+  - name: postgres
+    type: postgres
+    version: "15"
+    resources:
+      memory: 512MB
+      cpu: 0.5
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    env:
+      POSTGRES_DB: petfeeder
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    backup:
+      enabled: true
+      schedule: "0 2 * * *"
+      retention: 30
+
+  # Redis Cache
+  - name: redis
+    type: redis
+    version: "7"
+    resources:
+      memory: 256MB
+      cpu: 0.25
+    password: ${REDIS_PASSWORD}
+    persistence: true
+
+  # MQTT Broker
+  - name: mosquitto
+    type: app
+    image: eclipse-mosquitto:2
+    ports:
+      - 1883:1883
+      - 9001:9001
+    volumes:
+      - ./mosquitto:/mosquitto
+    resources:
+      memory: 128MB
+      cpu: 0.25
+
+  # Backend API
+  - name: backend
+    type: app
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - 3000
+    domains:
+      - api.petfeeder.com.br
+    env:
+      NODE_ENV: production
+      DATABASE_URL: ${DATABASE_URL}
+      REDIS_URL: ${REDIS_URL}
+      JWT_SECRET: ${JWT_SECRET}
+    healthcheck:
+      path: /health
+      interval: 30
+    resources:
+      memory: 1024MB
+      cpu: 1
+    autoscaling:
+      enabled: true
+      min: 1
+      max: 5
+      cpu_threshold: 70
+      memory_threshold: 80
+
+  # Frontend Next.js
+  - name: frontend
+    type: app
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - 3000
+    domains:
+      - petfeeder.com.br
+      - www.petfeeder.com.br
+    env:
+      NEXT_PUBLIC_API_URL: https://api.petfeeder.com.br
+    resources:
+      memory: 512MB
+      cpu: 0.5
+    cdn:
+      enabled: true
+
+# Volumes
+volumes:
+  postgres_data:
+    size: 10GB
+  redis_data:
+    size: 1GB
+  uploads:
+    size: 5GB
+
+# SSL Configuration
+ssl:
+  provider: letsencrypt
+  email: ${LETSENCRYPT_EMAIL}
+
+# Monitoring
+monitoring:
+  enabled: true
+  grafana: true
+  prometheus: true
+  alerts:
+    - type: cpu
+      threshold: 80
+      duration: 5m
+    - type: memory
+      threshold: 90
+      duration: 5m
+    - type: disk
+      threshold: 85
+      duration: 10m
+
+# Backup Configuration
+backup:
+  enabled: true
+  schedule: "0 2 * * *"
+  retention_days: 30
+  destinations:
+    - type: s3
+      bucket: petfeeder-backups
+      region: us-east-1
+
+# Environment Variables (loaded from EasyPanel secrets)
+secrets:
+  - DB_USER
+  - DB_PASSWORD
+  - REDIS_PASSWORD
+  - JWT_SECRET
+  - STRIPE_SECRET_KEY
+  - SMTP_USER
+  - SMTP_PASS
+
+# Deployment Configuration
+deploy:
+  strategy: rolling
+  healthcheck_timeout: 30
+  zero_downtime: true
+  auto_rollback: true
+  
+# GitHub Actions Integration
+ci_cd:
+  provider: github
+  repository: seu-usuario/petfeeder-saas
+  branch: main
+  auto_deploy: true
+  
+# Logs
+logging:
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+    
+# Network Configuration
+network:
+  internal_network: true
+  ipv6: false

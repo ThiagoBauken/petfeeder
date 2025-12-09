@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login - PetFeeder Pro</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="auth.css">
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body class="auth-page">
+    <div class="auth-container">
+        <div class="auth-left">
+            <div class="auth-brand">
+                <i class="fas fa-paw"></i>
+                <h1>PetFeeder Pro</h1>
+                <p>Sistema inteligente de alimentação automática para seus pets</p>
+            </div>
+            <div class="auth-features">
+                <div class="feature-item">
+                    <i class="fas fa-clock"></i>
+                    <div>
+                        <h3>Horários Programados</h3>
+                        <p>Defina horários automáticos de alimentação</p>
+                    </div>
+                </div>
+                <div class="feature-item">
+                    <i class="fas fa-chart-line"></i>
+                    <div>
+                        <h3>Monitoramento em Tempo Real</h3>
+                        <p>Acompanhe tudo pelo smartphone</p>
+                    </div>
+                </div>
+                <div class="feature-item">
+                    <i class="fas fa-mobile-alt"></i>
+                    <div>
+                        <h3>Controle Remoto</h3>
+                        <p>Alimente seus pets de qualquer lugar</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="auth-right">
+            <!-- Login Form -->
+            <div class="auth-form-container" id="login-form">
+                <h2>Bem-vindo de volta!</h2>
+                <p class="auth-subtitle">Entre com sua conta para continuar</p>
+
+                <form id="form-login" class="auth-form">
+                    <div class="form-group">
+                        <label for="login-email">Email</label>
+                        <div class="input-with-icon">
+                            <i class="fas fa-envelope"></i>
+                            <input type="email" id="login-email" placeholder="seu@email.com" required>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="login-password">Senha</label>
+                        <div class="input-with-icon">
+                            <i class="fas fa-lock"></i>
+                            <input type="password" id="login-password" placeholder="••••••••" required>
+                            <button type="button" class="toggle-password" onclick="togglePassword('login-password')">
+                                <i class="fas fa-eye"></i>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="form-options">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="remember-me">
+                            <span>Lembrar-me</span>
+                        </label>
+                        <a href="#" class="forgot-password">Esqueceu a senha?</a>
+                    </div>
+
+                    <button type="submit" class="btn-primary" id="btn-login">
+                        <span>Entrar</span>
+                        <i class="fas fa-arrow-right"></i>
+                    </button>
+
+                    <div class="auth-divider">
+                        <span>ou</span>
+                    </div>
+
+                    <button type="button" class="btn-social google">
+                        <i class="fab fa-google"></i>
+                        Continuar com Google
+                    </button>
+
+                    <p class="auth-switch">
+                        Não tem uma conta?
+                        <a href="#" onclick="showRegister(); return false;">Criar conta</a>
+                    </p>
+                </form>
+            </div>
+
+            <!-- Register Form -->
+            <div class="auth-form-container hidden" id="register-form">
+                <h2>Criar sua conta</h2>
+                <p class="auth-subtitle">Comece gratuitamente agora</p>
+
+                <form id="form-register" class="auth-form">
+                    <div class="form-group">
+                        <label for="register-name">Nome completo</label>
+                        <div class="input-with-icon">
+                            <i class="fas fa-user"></i>
+                            <input type="text" id="register-name" placeholder="Seu nome" required>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="register-email">Email</label>
+                        <div class="input-with-icon">
+                            <i class="fas fa-envelope"></i>
+                            <input type="email" id="register-email" placeholder="seu@email.com" required>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="register-password">Senha</label>
+                        <div class="input-with-icon">
+                            <i class="fas fa-lock"></i>
+                            <input type="password" id="register-password" placeholder="Mínimo 8 caracteres" required minlength="8">
+                            <button type="button" class="toggle-password" onclick="togglePassword('register-password')">
+                                <i class="fas fa-eye"></i>
+                            </button>
+                        </div>
+                        <div class="password-strength" id="password-strength"></div>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="register-confirm-password">Confirmar senha</label>
+                        <div class="input-with-icon">
+                            <i class="fas fa-lock"></i>
+                            <input type="password" id="register-confirm-password" placeholder="Repita a senha" required>
+                            <button type="button" class="toggle-password" onclick="togglePassword('register-confirm-password')">
+                                <i class="fas fa-eye"></i>
+                            </button>
+                        </div>
+                    </div>
+
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="accept-terms" required>
+                        <span>Aceito os <a href="#">Termos de Uso</a> e <a href="#">Política de Privacidade</a></span>
+                    </label>
+
+                    <button type="submit" class="btn-primary" id="btn-register">
+                        <span>Criar conta</span>
+                        <i class="fas fa-arrow-right"></i>
+                    </button>
+
+                    <div class="auth-divider">
+                        <span>ou</span>
+                    </div>
+
+                    <button type="button" class="btn-social google">
+                        <i class="fab fa-google"></i>
+                        Continuar com Google
+                    </button>
+
+                    <p class="auth-switch">
+                        Já tem uma conta?
+                        <a href="#" onclick="showLogin(); return false;">Fazer login</a>
+                    </p>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Loading Overlay -->
+    <div class="loading-overlay" id="loading-overlay">
+        <div class="spinner"></div>
+        <p>Carregando...</p>
+    </div>
+
+    <script src="auth.js"></script>
+</body>
+</html>

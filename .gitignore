@@ -1,0 +1,73 @@
+# Dependencies
+node_modules/
+package-lock.json
+yarn.lock
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# Build outputs
+dist/
+build/
+.next/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Database
+*.sqlite
+*.sqlite3
+*.db
+
+# Docker volumes (dados locais)
+postgres_data/
+redis_data/
+grafana_data/
+prometheus_data/
+backups/
+mosquitto/data/
+mosquitto/log/
+letsencrypt/
+
+# Uploads
+uploads/
+
+# Coverage
+coverage/
+
+# Compressed files
+*.tar.gz
+*.zip
+
+# Claude settings
+.claude/
+
+# Secrets (nunca commit)
+*.pem
+*.key
+credentials.json
+service-account.json
+
+# Windows reserved files
+nul
+NUL
+con
+CON
+aux
+AUX
+prn
+PRN

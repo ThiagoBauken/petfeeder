@@ -1,0 +1,171 @@
+{
+  "dashboard": {
+    "title": "PetFeeder Overview",
+    "tags": ["petfeeder", "overview"],
+    "timezone": "browser",
+    "panels": [
+      {
+        "id": 1,
+        "title": "Total Devices",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "count(mqtt_connected_clients)",
+            "legendFormat": "Devices"
+          }
+        ],
+        "gridPos": {
+          "h": 4,
+          "w": 6,
+          "x": 0,
+          "y": 0
+        }
+      },
+      {
+        "id": 2,
+        "title": "Active Users",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "count(rate(http_requests_total[5m]))",
+            "legendFormat": "Users"
+          }
+        ],
+        "gridPos": {
+          "h": 4,
+          "w": 6,
+          "x": 6,
+          "y": 0
+        }
+      },
+      {
+        "id": 3,
+        "title": "Feeding Events (Today)",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "sum(increase(feedings_total[24h]))",
+            "legendFormat": "Feedings"
+          }
+        ],
+        "gridPos": {
+          "h": 4,
+          "w": 6,
+          "x": 12,
+          "y": 0
+        }
+      },
+      {
+        "id": 4,
+        "title": "System Health",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "up",
+            "legendFormat": "{{ job }}"
+          }
+        ],
+        "gridPos": {
+          "h": 4,
+          "w": 6,
+          "x": 18,
+          "y": 0
+        }
+      },
+      {
+        "id": 5,
+        "title": "HTTP Requests Rate",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rate(http_requests_total[5m])",
+            "legendFormat": "{{ method }} {{ path }}"
+          }
+        ],
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 0,
+          "y": 4
+        }
+      },
+      {
+        "id": 6,
+        "title": "MQTT Messages",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rate(mqtt_messages_received_total[5m])",
+            "legendFormat": "Received"
+          },
+          {
+            "expr": "rate(mqtt_messages_sent_total[5m])",
+            "legendFormat": "Sent"
+          }
+        ],
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 12,
+          "y": 4
+        }
+      },
+      {
+        "id": 7,
+        "title": "Database Connections",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "pg_stat_database_numbackends",
+            "legendFormat": "Connections"
+          }
+        ],
+        "gridPos": {
+          "h": 6,
+          "w": 8,
+          "x": 0,
+          "y": 12
+        }
+      },
+      {
+        "id": 8,
+        "title": "Redis Memory Usage",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "redis_memory_used_bytes",
+            "legendFormat": "Memory Used"
+          }
+        ],
+        "gridPos": {
+          "h": 6,
+          "w": 8,
+          "x": 8,
+          "y": 12
+        }
+      },
+      {
+        "id": 9,
+        "title": "CPU Usage",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rate(process_cpu_seconds_total[5m]) * 100",
+            "legendFormat": "{{ job }}"
+          }
+        ],
+        "gridPos": {
+          "h": 6,
+          "w": 8,
+          "x": 16,
+          "y": 12
+        }
+      }
+    ],
+    "refresh": "10s",
+    "time": {
+      "from": "now-6h",
+      "to": "now"
+    }
+  }
+}

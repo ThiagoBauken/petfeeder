@@ -1,0 +1,49 @@
+# Mosquitto ACL Configuration
+# /mosquitto/config/acl.txt
+
+# ==================== ADMIN USERS ====================
+# Admin tem acesso total
+user admin
+topic readwrite #
+
+# ==================== SERVER USER ====================
+# Servidor backend pode ler e escrever em todos os tópicos de dispositivos
+user server
+topic readwrite devices/#
+topic readwrite server/#
+topic read $SYS/#
+
+# ==================== DEVICE PATTERNS ====================
+# Cada dispositivo pode publicar apenas em seus próprios tópicos
+# Pattern: device_PF_XXXXXXXXXXXX
+
+pattern readwrite devices/%u/status
+pattern readwrite devices/%u/telemetry
+pattern readwrite devices/%u/alert
+pattern readwrite devices/%u/response
+pattern readwrite devices/%u/feeding
+pattern readwrite devices/%u/logs
+pattern read devices/%u/command
+pattern read devices/%u/config
+pattern read devices/%u/ota
+
+# ==================== CLIENT PATTERNS ====================
+# Clientes web/mobile podem subscrever aos tópicos de seus dispositivos
+# Pattern: client_USER_ID
+
+pattern read devices/+/status
+pattern read devices/+/telemetry
+pattern read devices/+/alert
+pattern write devices/+/command
+
+# ==================== MONITORING ====================
+# User para monitoramento (Grafana, etc)
+user monitoring
+topic read $SYS/#
+topic read devices/+/telemetry
+topic read devices/+/status
+
+# ==================== DEFAULT DENY ====================
+# Nega tudo que não foi explicitamente permitido
+user *
+topic deny #

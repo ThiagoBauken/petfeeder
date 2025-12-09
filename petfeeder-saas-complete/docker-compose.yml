@@ -1,0 +1,228 @@
+version: '3.8'
+
+services:
+  # ==================== BANCO DE DADOS ====================
+  postgres:
+    image: postgres:15-alpine
+    container_name: petfeeder-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: petfeeder
+      POSTGRES_USER: ${DB_USER:-petfeeder}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-changeme}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U petfeeder"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - petfeeder-network
+
+  # ==================== CACHE/SESSÕES ====================
+  redis:
+    image: redis:7-alpine
+    container_name: petfeeder-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-changeme}
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - petfeeder-network
+
+  # ==================== MQTT BROKER ====================
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: petfeeder-mqtt
+    restart: unless-stopped
+    volumes:
+      - ./mosquitto/config:/mosquitto/config
+      - ./mosquitto/data:/mosquitto/data
+      - ./mosquitto/log:/mosquitto/log
+    ports:
+      - "1883:1883"
+      - "9001:9001" # WebSocket
+    networks:
+      - petfeeder-network
+
+  # ==================== APLICAÇÃO BACKEND ====================
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: petfeeder-backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      mosquitto:
+        condition: service_started
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      
+      # Database
+      DATABASE_URL: postgresql://${DB_USER:-petfeeder}:${DB_PASSWORD:-changeme}@postgres:5432/petfeeder
+      
+      # Redis
+      REDIS_URL: redis://:${REDIS_PASSWORD:-changeme}@redis:6379
+      
+      # MQTT
+      MQTT_BROKER: mqtt://mosquitto:1883
+      MQTT_USERNAME: ${MQTT_USERNAME:-admin}
+      MQTT_PASSWORD: ${MQTT_PASSWORD:-admin}
+      
+      # Security
+      JWT_SECRET: ${JWT_SECRET:-your-super-secret-jwt-key}
+      COOKIE_SECRET: ${COOKIE_SECRET:-your-cookie-secret}
+      
+      # Email
+      SMTP_HOST: ${SMTP_HOST:-smtp.gmail.com}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER}
+      SMTP_PASS: ${SMTP_PASS}
+      
+      # Stripe
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET}
+      
+      # Storage
+      S3_BUCKET: ${S3_BUCKET}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY}
+      
+      # Monitoring
+      SENTRY_DSN: ${SENTRY_DSN}
+    ports:
+      - "3000:3000"
+      - "8080:8080" # WebSocket
+    volumes:
+      - ./uploads:/app/uploads
+      - ./logs:/app/logs
+    networks:
+      - petfeeder-network
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.backend.rule=Host(`api.${DOMAIN:-localhost}`)"
+      - "traefik.http.services.backend.loadbalancer.server.port=3000"
+
+  # ==================== FRONTEND ====================
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: petfeeder-frontend
+    restart: unless-stopped
+    environment:
+      NEXT_PUBLIC_API_URL: https://api.${DOMAIN:-localhost}
+      NEXT_PUBLIC_WS_URL: wss://api.${DOMAIN:-localhost}
+      NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: ${STRIPE_PUBLISHABLE_KEY}
+    ports:
+      - "3001:3000"
+    networks:
+      - petfeeder-network
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.frontend.rule=Host(`${DOMAIN:-localhost}`)"
+      - "traefik.http.services.frontend.loadbalancer.server.port=3000"
+
+  # ==================== REVERSE PROXY ====================
+  traefik:
+    image: traefik:v2.10
+    container_name: petfeeder-traefik
+    restart: unless-stopped
+    command:
+      - "--api.insecure=true"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      - "--certificatesresolvers.letsencrypt.acme.httpchallenge=true"
+      - "--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web"
+      - "--certificatesresolvers.letsencrypt.acme.email=${LETSENCRYPT_EMAIL}"
+      - "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8081:8080" # Dashboard
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./letsencrypt:/letsencrypt
+    networks:
+      - petfeeder-network
+
+  # ==================== MONITORING ====================
+  grafana:
+    image: grafana/grafana:latest
+    container_name: petfeeder-grafana
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_INSTALL_PLUGINS: redis-datasource,redis-app
+    ports:
+      - "3002:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/dashboards:/etc/grafana/provisioning/dashboards
+      - ./grafana/datasources:/etc/grafana/provisioning/datasources
+    networks:
+      - petfeeder-network
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: petfeeder-prometheus
+    restart: unless-stopped
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    networks:
+      - petfeeder-network
+
+  # ==================== BACKUPS ====================
+  pgbackup:
+    image: prodrigestivill/postgres-backup-local
+    container_name: petfeeder-backup
+    restart: unless-stopped
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_DB: petfeeder
+      POSTGRES_USER: ${DB_USER:-petfeeder}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-changeme}
+      SCHEDULE: "@daily"
+      BACKUP_KEEP_DAYS: 7
+      BACKUP_KEEP_WEEKS: 4
+      BACKUP_KEEP_MONTHS: 6
+    volumes:
+      - ./backups:/backups
+    networks:
+      - petfeeder-network
+
+volumes:
+  postgres_data:
+  redis_data:
+  grafana_data:
+  prometheus_data:
+
+networks:
+  petfeeder-network:
+    driver: bridge

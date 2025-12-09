@@ -1,0 +1,823 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Guia de Montagem - PetFeeder</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="style.css">
+    <style>
+        .guide-container {
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .guide-header {
+            text-align: center;
+            margin-bottom: 40px;
+            padding: 40px 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 20px;
+            color: white;
+        }
+
+        .guide-header h1 {
+            font-size: 32px;
+            margin-bottom: 10px;
+        }
+
+        .guide-section {
+            background: white;
+            border-radius: 16px;
+            padding: 30px;
+            margin-bottom: 30px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+        }
+
+        .guide-section h2 {
+            color: #333;
+            border-bottom: 3px solid #667eea;
+            padding-bottom: 10px;
+            margin-bottom: 25px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .guide-section h2 i {
+            color: #667eea;
+        }
+
+        .pin-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+        }
+
+        .pin-table th, .pin-table td {
+            padding: 12px 15px;
+            text-align: left;
+            border-bottom: 1px solid #eee;
+        }
+
+        .pin-table th {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            font-weight: 600;
+        }
+
+        .pin-table tr:hover {
+            background: #f8f9ff;
+        }
+
+        .pin-table .gpio {
+            font-family: monospace;
+            background: #f0f0f0;
+            padding: 4px 10px;
+            border-radius: 4px;
+            font-weight: bold;
+        }
+
+        .motor-section {
+            background: linear-gradient(135deg, #f8f9ff 0%, #fff 100%);
+            border: 2px solid #667eea;
+            border-radius: 12px;
+            padding: 20px;
+            margin: 20px 0;
+        }
+
+        .motor-section h3 {
+            color: #667eea;
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .motor-section.active {
+            border-color: #28a745;
+        }
+
+        .motor-section.optional {
+            opacity: 0.7;
+            border-style: dashed;
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .badge-active {
+            background: #28a745;
+            color: white;
+        }
+
+        .badge-optional {
+            background: #ffc107;
+            color: #333;
+        }
+
+        .diagram {
+            background: #1a1a2e;
+            color: #0f0;
+            font-family: 'Courier New', monospace;
+            padding: 20px;
+            border-radius: 12px;
+            margin: 20px 0;
+            overflow-x: auto;
+            white-space: pre;
+            line-height: 1.4;
+        }
+
+        .sensor-info {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin: 20px 0;
+        }
+
+        .sensor-card {
+            background: #f8f9fa;
+            border-radius: 12px;
+            padding: 20px;
+            text-align: center;
+        }
+
+        .sensor-card.full {
+            border-left: 5px solid #28a745;
+        }
+
+        .sensor-card.empty {
+            border-left: 5px solid #dc3545;
+        }
+
+        .sensor-card h4 {
+            margin-bottom: 10px;
+        }
+
+        .sensor-card .value {
+            font-size: 36px;
+            font-weight: bold;
+            color: #667eea;
+        }
+
+        .sensor-card .unit {
+            font-size: 14px;
+            color: #666;
+        }
+
+        .steps-list {
+            counter-reset: step;
+        }
+
+        .step-item {
+            display: flex;
+            gap: 20px;
+            margin: 20px 0;
+            padding: 20px;
+            background: #f8f9fa;
+            border-radius: 12px;
+        }
+
+        .step-number {
+            counter-increment: step;
+            width: 40px;
+            height: 40px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            flex-shrink: 0;
+        }
+
+        .step-number::before {
+            content: counter(step);
+        }
+
+        .step-content h4 {
+            margin-bottom: 10px;
+            color: #333;
+        }
+
+        .step-content p {
+            color: #666;
+            margin: 0;
+        }
+
+        .warning-box {
+            background: #fff3cd;
+            border: 1px solid #ffc107;
+            border-left: 5px solid #ffc107;
+            padding: 15px 20px;
+            border-radius: 8px;
+            margin: 20px 0;
+        }
+
+        .warning-box i {
+            color: #ffc107;
+            margin-right: 10px;
+        }
+
+        .info-box {
+            background: #e7f3ff;
+            border: 1px solid #b6d4fe;
+            border-left: 5px solid #0d6efd;
+            padding: 15px 20px;
+            border-radius: 8px;
+            margin: 20px 0;
+        }
+
+        .info-box i {
+            color: #0d6efd;
+            margin-right: 10px;
+        }
+
+        .success-box {
+            background: #d1e7dd;
+            border: 1px solid #badbcc;
+            border-left: 5px solid #198754;
+            padding: 15px 20px;
+            border-radius: 8px;
+            margin: 20px 0;
+        }
+
+        .success-box i {
+            color: #198754;
+            margin-right: 10px;
+        }
+
+        .code-block {
+            background: #2d2d2d;
+            color: #f8f8f2;
+            padding: 20px;
+            border-radius: 12px;
+            overflow-x: auto;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            line-height: 1.6;
+        }
+
+        .code-block .comment {
+            color: #6a9955;
+        }
+
+        .code-block .keyword {
+            color: #569cd6;
+        }
+
+        .code-block .number {
+            color: #b5cea8;
+        }
+
+        .materials-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin: 20px 0;
+        }
+
+        .material-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 10px;
+        }
+
+        .material-item i {
+            font-size: 24px;
+            color: #667eea;
+        }
+
+        .material-item .qty {
+            background: #667eea;
+            color: white;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 12px;
+            margin-left: auto;
+        }
+
+        .back-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 12px 24px;
+            background: white;
+            color: #667eea;
+            border-radius: 10px;
+            text-decoration: none;
+            font-weight: 600;
+            margin-bottom: 20px;
+            transition: all 0.3s;
+        }
+
+        .back-btn:hover {
+            background: #f0f0f0;
+            transform: translateX(-5px);
+        }
+
+        @media (max-width: 768px) {
+            .sensor-info {
+                grid-template-columns: 1fr;
+            }
+
+            .pin-table {
+                font-size: 14px;
+            }
+
+            .diagram {
+                font-size: 11px;
+            }
+        }
+    </style>
+</head>
+<body style="background: #f5f6fa; min-height: 100vh; padding: 20px;">
+    <div class="guide-container">
+        <a href="dashboard.html" class="back-btn">
+            <i class="fas fa-arrow-left"></i> Voltar ao Dashboard
+        </a>
+
+        <div class="guide-header">
+            <h1><i class="fas fa-tools"></i> Guia de Montagem</h1>
+            <p>PetFeeder ESP32 - Hardware e Conexões</p>
+        </div>
+
+        <!-- Materiais Necessários -->
+        <div class="guide-section">
+            <h2><i class="fas fa-shopping-cart"></i> Materiais Necessários</h2>
+
+            <div class="materials-grid">
+                <div class="material-item">
+                    <i class="fas fa-microchip"></i>
+                    <div>
+                        <strong>ESP32 DevKitC</strong>
+                        <div style="font-size: 12px; color: #666;">CH340C ou CP2102</div>
+                    </div>
+                    <span class="qty">1x</span>
+                </div>
+                <div class="material-item">
+                    <i class="fas fa-cog"></i>
+                    <div>
+                        <strong>Motor 28BYJ-48</strong>
+                        <div style="font-size: 12px; color: #666;">5V Stepper</div>
+                    </div>
+                    <span class="qty">1-3x</span>
+                </div>
+                <div class="material-item">
+                    <i class="fas fa-microchip"></i>
+                    <div>
+                        <strong>Driver ULN2003</strong>
+                        <div style="font-size: 12px; color: #666;">Para cada motor</div>
+                    </div>
+                    <span class="qty">1-3x</span>
+                </div>
+                <div class="material-item">
+                    <i class="fas fa-satellite-dish"></i>
+                    <div>
+                        <strong>Sensor HC-SR04</strong>
+                        <div style="font-size: 12px; color: #666;">Ultrassônico</div>
+                    </div>
+                    <span class="qty">1x</span>
+                </div>
+                <div class="material-item">
+                    <i class="fas fa-plug"></i>
+                    <div>
+                        <strong>Fonte 5V</strong>
+                        <div style="font-size: 12px; color: #666;">Min 2A</div>
+                    </div>
+                    <span class="qty">1x</span>
+                </div>
+                <div class="material-item">
+                    <i class="fas fa-project-diagram"></i>
+                    <div>
+                        <strong>Jumpers</strong>
+                        <div style="font-size: 12px; color: #666;">Macho-Fêmea</div>
+                    </div>
+                    <span class="qty">~20x</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Pinagem dos Motores -->
+        <div class="guide-section">
+            <h2><i class="fas fa-cogs"></i> Pinagem dos Motores (ULN2003)</h2>
+
+            <div class="info-box">
+                <i class="fas fa-info-circle"></i>
+                <strong>Cada compartimento usa 1 motor.</strong> Comece com 1 motor e adicione mais conforme necessidade.
+            </div>
+
+            <!-- Motor 1 -->
+            <div class="motor-section active">
+                <h3>
+                    <i class="fas fa-cog"></i>
+                    Motor 1 - Compartimento 1
+                    <span class="badge badge-active">Obrigatório</span>
+                </h3>
+                <table class="pin-table">
+                    <tr>
+                        <th>ULN2003</th>
+                        <th>ESP32</th>
+                        <th>Descrição</th>
+                    </tr>
+                    <tr>
+                        <td>IN1</td>
+                        <td><span class="gpio">GPIO 16</span></td>
+                        <td>Bobina A</td>
+                    </tr>
+                    <tr>
+                        <td>IN2</td>
+                        <td><span class="gpio">GPIO 17</span></td>
+                        <td>Bobina B</td>
+                    </tr>
+                    <tr>
+                        <td>IN3</td>
+                        <td><span class="gpio">GPIO 18</span></td>
+                        <td>Bobina C</td>
+                    </tr>
+                    <tr>
+                        <td>IN4</td>
+                        <td><span class="gpio">GPIO 19</span></td>
+                        <td>Bobina D</td>
+                    </tr>
+                    <tr>
+                        <td>VCC</td>
+                        <td><span class="gpio">5V</span></td>
+                        <td>Alimentação motor</td>
+                    </tr>
+                    <tr>
+                        <td>GND</td>
+                        <td><span class="gpio">GND</span></td>
+                        <td>Terra comum</td>
+                    </tr>
+                </table>
+            </div>
+
+            <!-- Motor 2 -->
+            <div class="motor-section optional">
+                <h3>
+                    <i class="fas fa-cog"></i>
+                    Motor 2 - Compartimento 2
+                    <span class="badge badge-optional">Opcional</span>
+                </h3>
+                <table class="pin-table">
+                    <tr>
+                        <th>ULN2003</th>
+                        <th>ESP32</th>
+                        <th>Descrição</th>
+                    </tr>
+                    <tr>
+                        <td>IN1</td>
+                        <td><span class="gpio">GPIO 25</span></td>
+                        <td>Bobina A</td>
+                    </tr>
+                    <tr>
+                        <td>IN2</td>
+                        <td><span class="gpio">GPIO 26</span></td>
+                        <td>Bobina B</td>
+                    </tr>
+                    <tr>
+                        <td>IN3</td>
+                        <td><span class="gpio">GPIO 27</span></td>
+                        <td>Bobina C</td>
+                    </tr>
+                    <tr>
+                        <td>IN4</td>
+                        <td><span class="gpio">GPIO 32</span></td>
+                        <td>Bobina D</td>
+                    </tr>
+                    <tr>
+                        <td>VCC</td>
+                        <td><span class="gpio">5V</span></td>
+                        <td>Alimentação motor</td>
+                    </tr>
+                    <tr>
+                        <td>GND</td>
+                        <td><span class="gpio">GND</span></td>
+                        <td>Terra comum</td>
+                    </tr>
+                </table>
+            </div>
+
+            <!-- Motor 3 -->
+            <div class="motor-section optional">
+                <h3>
+                    <i class="fas fa-cog"></i>
+                    Motor 3 - Compartimento 3
+                    <span class="badge badge-optional">Opcional</span>
+                </h3>
+                <table class="pin-table">
+                    <tr>
+                        <th>ULN2003</th>
+                        <th>ESP32</th>
+                        <th>Descrição</th>
+                    </tr>
+                    <tr>
+                        <td>IN1</td>
+                        <td><span class="gpio">GPIO 12</span></td>
+                        <td>Bobina A</td>
+                    </tr>
+                    <tr>
+                        <td>IN2</td>
+                        <td><span class="gpio">GPIO 13</span></td>
+                        <td>Bobina B</td>
+                    </tr>
+                    <tr>
+                        <td>IN3</td>
+                        <td><span class="gpio">GPIO 14</span></td>
+                        <td>Bobina C</td>
+                    </tr>
+                    <tr>
+                        <td>IN4</td>
+                        <td><span class="gpio">GPIO 15</span></td>
+                        <td>Bobina D</td>
+                    </tr>
+                    <tr>
+                        <td>VCC</td>
+                        <td><span class="gpio">5V</span></td>
+                        <td>Alimentação motor</td>
+                    </tr>
+                    <tr>
+                        <td>GND</td>
+                        <td><span class="gpio">GND</span></td>
+                        <td>Terra comum</td>
+                    </tr>
+                </table>
+            </div>
+
+            <div class="warning-box">
+                <i class="fas fa-exclamation-triangle"></i>
+                <strong>Atenção:</strong> GPIO 12 pode causar problemas no boot se estiver HIGH. Certifique-se de que o motor está em LOW ao iniciar.
+            </div>
+        </div>
+
+        <!-- Sensor Ultrassônico -->
+        <div class="guide-section">
+            <h2><i class="fas fa-satellite-dish"></i> Sensor Ultrassônico HC-SR04</h2>
+
+            <table class="pin-table">
+                <tr>
+                    <th>HC-SR04</th>
+                    <th>ESP32</th>
+                    <th>Descrição</th>
+                </tr>
+                <tr>
+                    <td>VCC</td>
+                    <td><span class="gpio">5V</span></td>
+                    <td>Alimentação (5V obrigatório!)</td>
+                </tr>
+                <tr>
+                    <td>GND</td>
+                    <td><span class="gpio">GND</span></td>
+                    <td>Terra comum</td>
+                </tr>
+                <tr>
+                    <td>TRIG</td>
+                    <td><span class="gpio">GPIO 23</span></td>
+                    <td>Disparo do pulso</td>
+                </tr>
+                <tr>
+                    <td>ECHO</td>
+                    <td><span class="gpio">GPIO 22</span></td>
+                    <td>Recepção do eco</td>
+                </tr>
+            </table>
+
+            <h3 style="margin-top: 30px;"><i class="fas fa-question-circle"></i> Como funciona a detecção de nível?</h3>
+
+            <p>O sensor fica no <strong>topo do reservatório</strong> de ração, apontando para baixo. Ele mede a distância até a superfície da ração:</p>
+
+            <div class="sensor-info">
+                <div class="sensor-card full">
+                    <h4><i class="fas fa-check-circle" style="color: #28a745;"></i> Reservatório CHEIO</h4>
+                    <div class="value">~5</div>
+                    <div class="unit">centímetros</div>
+                    <p style="margin-top: 10px; font-size: 14px; color: #666;">
+                        Ração perto do sensor = 100%
+                    </p>
+                </div>
+                <div class="sensor-card empty">
+                    <h4><i class="fas fa-exclamation-circle" style="color: #dc3545;"></i> Reservatório VAZIO</h4>
+                    <div class="value">~30</div>
+                    <div class="unit">centímetros</div>
+                    <p style="margin-top: 10px; font-size: 14px; color: #666;">
+                        Ração longe do sensor = 0%
+                    </p>
+                </div>
+            </div>
+
+            <div class="diagram">
+        ┌─────────────────────────────┐
+        │      [  HC-SR04  ]          │  ← Sensor no topo
+        │           ↓                 │
+        │    ░░░░░░░░░░░░░░░░░        │  ← Nível da ração
+        │    ░░░░░░░░░░░░░░░░░        │    (distância medida)
+        │    ░░░░░░░░░░░░░░░░░        │
+        │                             │
+        │                             │
+        └─────────────────────────────┘
+             Reservatório de ração
+            </div>
+
+            <div class="info-box">
+                <i class="fas fa-lightbulb"></i>
+                <strong>Dica:</strong> Você pode ajustar os valores de 5cm e 30cm no código conforme o tamanho do seu reservatório.
+            </div>
+        </div>
+
+        <!-- Configuração de Doses -->
+        <div class="guide-section">
+            <h2><i class="fas fa-weight"></i> Configuração de Doses</h2>
+
+            <p>O motor de passo 28BYJ-48 tem <strong>2048 passos por volta completa</strong>. As doses são configuradas assim:</p>
+
+            <table class="pin-table">
+                <tr>
+                    <th>Dose</th>
+                    <th>Passos</th>
+                    <th>Gramas (aprox)</th>
+                    <th>Voltas</th>
+                </tr>
+                <tr>
+                    <td><strong>Pequena</strong></td>
+                    <td><span class="gpio">2048</span></td>
+                    <td>~50g</td>
+                    <td>1 volta</td>
+                </tr>
+                <tr>
+                    <td><strong>Média</strong></td>
+                    <td><span class="gpio">4096</span></td>
+                    <td>~100g</td>
+                    <td>2 voltas</td>
+                </tr>
+                <tr>
+                    <td><strong>Grande</strong></td>
+                    <td><span class="gpio">6144</span></td>
+                    <td>~150g</td>
+                    <td>3 voltas</td>
+                </tr>
+            </table>
+
+            <div class="warning-box">
+                <i class="fas fa-balance-scale"></i>
+                <strong>Calibração:</strong> A quantidade de gramas depende do mecanismo do seu alimentador. Faça testes e ajuste os valores no código.
+            </div>
+
+            <h3>Código para ajustar doses:</h3>
+            <div class="code-block">
+<span class="comment">// No arquivo PetFeeder_SaaS_MultiMotor.ino</span>
+
+<span class="keyword">const int</span> DOSE_SMALL = <span class="number">2048</span>;   <span class="comment">// 1 volta (~50g)</span>
+<span class="keyword">const int</span> DOSE_MEDIUM = <span class="number">4096</span>;  <span class="comment">// 2 voltas (~100g)</span>
+<span class="keyword">const int</span> DOSE_LARGE = <span class="number">6144</span>;   <span class="comment">// 3 voltas (~150g)</span>
+
+<span class="comment">// Para adicionar mais motores, altere:</span>
+<span class="keyword">#define</span> NUM_COMPARTMENTS <span class="number">1</span>  <span class="comment">// Mude para 2 ou 3</span>
+            </div>
+        </div>
+
+        <!-- Diagrama de Conexão -->
+        <div class="guide-section">
+            <h2><i class="fas fa-project-diagram"></i> Diagrama de Conexão</h2>
+
+            <div class="diagram">
+                              ┌──────────────────┐
+                              │    ESP32         │
+                              │    DevKitC       │
+                              │                  │
+    ┌──────────┐              │  GPIO 16 ────────┼──── IN1 ┐
+    │ HC-SR04  │              │  GPIO 17 ────────┼──── IN2 │ Motor 1
+    │          │              │  GPIO 18 ────────┼──── IN3 │ ULN2003
+    │ VCC ─────┼── 5V ────────┤  GPIO 19 ────────┼──── IN4 ┘
+    │ GND ─────┼── GND ───────┤                  │
+    │ TRIG ────┼─────────────→│  GPIO 23         │     ┌── 5V
+    │ ECHO ────┼─────────────→│  GPIO 22         │     │
+    └──────────┘              │                  │     ▼
+                              │  GPIO 25 ────────┼──── IN1 ┐
+                              │  GPIO 26 ────────┼──── IN2 │ Motor 2
+                              │  GPIO 27 ────────┼──── IN3 │ (opcional)
+                              │  GPIO 32 ────────┼──── IN4 ┘
+                              │                  │
+                              │  GPIO 12 ────────┼──── IN1 ┐
+                              │  GPIO 13 ────────┼──── IN2 │ Motor 3
+                              │  GPIO 14 ────────┼──── IN3 │ (opcional)
+                              │  GPIO 15 ────────┼──── IN4 ┘
+                              │                  │
+                              │  5V ─────────────┼───────── VCC (todos)
+                              │  GND ────────────┼───────── GND (todos)
+                              └──────────────────┘
+            </div>
+        </div>
+
+        <!-- Passo a Passo -->
+        <div class="guide-section">
+            <h2><i class="fas fa-list-ol"></i> Passo a Passo</h2>
+
+            <div class="steps-list">
+                <div class="step-item">
+                    <div class="step-number"></div>
+                    <div class="step-content">
+                        <h4>Monte as conexões</h4>
+                        <p>Siga o diagrama acima para conectar o sensor HC-SR04 e o(s) motor(es) ao ESP32.</p>
+                    </div>
+                </div>
+
+                <div class="step-item">
+                    <div class="step-number"></div>
+                    <div class="step-content">
+                        <h4>Carregue o código no ESP32</h4>
+                        <p>Abra o Arduino IDE, selecione "ESP32 Dev Module" e faça upload do arquivo <code>PetFeeder_SaaS_MultiMotor.ino</code></p>
+                    </div>
+                </div>
+
+                <div class="step-item">
+                    <div class="step-number"></div>
+                    <div class="step-content">
+                        <h4>Conecte na rede WiFi do ESP32</h4>
+                        <p>O ESP32 criará uma rede chamada "PetFeeder_XXXXXX". Conecte-se com a senha <strong>12345678</strong></p>
+                    </div>
+                </div>
+
+                <div class="step-item">
+                    <div class="step-number"></div>
+                    <div class="step-content">
+                        <h4>Acesse o portal de configuração</h4>
+                        <p>Abra o navegador e vá para <strong>http://192.168.4.1</strong></p>
+                    </div>
+                </div>
+
+                <div class="step-item">
+                    <div class="step-number"></div>
+                    <div class="step-content">
+                        <h4>Configure o WiFi e token</h4>
+                        <p>Selecione sua rede WiFi, digite a senha e cole o token obtido na página "Minha Conta" do sistema.</p>
+                    </div>
+                </div>
+
+                <div class="step-item">
+                    <div class="step-number"></div>
+                    <div class="step-content">
+                        <h4>Pronto!</h4>
+                        <p>O ESP32 irá reiniciar e conectar automaticamente. O dispositivo aparecerá no seu dashboard.</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="success-box">
+                <i class="fas fa-check-circle"></i>
+                <strong>Sucesso!</strong> Seu PetFeeder está configurado e pronto para uso. Adicione seus pets e crie horários de alimentação!
+            </div>
+        </div>
+
+        <!-- Troubleshooting -->
+        <div class="guide-section">
+            <h2><i class="fas fa-wrench"></i> Solução de Problemas</h2>
+
+            <div class="warning-box">
+                <strong><i class="fas fa-cog"></i> Motor não gira:</strong>
+                <ul style="margin: 10px 0 0 20px;">
+                    <li>Verifique todas as 4 conexões IN1-IN4</li>
+                    <li>Confirme que VCC do ULN2003 está em 5V</li>
+                    <li>Verifique se o GND está conectado</li>
+                    <li>Teste trocar a ordem dos pinos (IN1↔IN3, IN2↔IN4)</li>
+                </ul>
+            </div>
+
+            <div class="warning-box">
+                <strong><i class="fas fa-satellite-dish"></i> Sensor não funciona:</strong>
+                <ul style="margin: 10px 0 0 20px;">
+                    <li>O VCC DEVE ser 5V (não funciona em 3.3V)</li>
+                    <li>Troque TRIG e ECHO se as leituras forem zero</li>
+                    <li>Evite superfícies muito próximas (&lt;2cm) ou inclinadas</li>
+                </ul>
+            </div>
+
+            <div class="warning-box">
+                <strong><i class="fas fa-wifi"></i> ESP32 não conecta ao WiFi:</strong>
+                <ul style="margin: 10px 0 0 20px;">
+                    <li>Verifique se a senha está correta</li>
+                    <li>O ESP32 só suporta WiFi 2.4GHz (não 5GHz)</li>
+                    <li>Tente aproximar do roteador</li>
+                </ul>
+            </div>
+        </div>
+
+        <div style="text-align: center; padding: 30px; color: #666;">
+            <p>PetFeeder SaaS - Guia de Montagem v2.0</p>
+            <a href="dashboard.html" class="back-btn" style="display: inline-flex;">
+                <i class="fas fa-arrow-left"></i> Voltar ao Dashboard
+            </a>
+        </div>
+    </div>
+</body>
+</html>
