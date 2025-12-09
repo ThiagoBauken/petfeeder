@@ -882,25 +882,29 @@ async function addSchedule() {
 
     try {
         let successCount = 0;
-        let errorCount = 0;
+        let errorMessages = [];
 
         // Cria um schedule para cada horário
         for (const timeValue of times) {
             const [hour, minute] = timeValue.split(':').map(Number);
 
-            const result = await api.createSchedule({
-                deviceId,
-                petId,
-                hour,
-                minute,
-                amount: dose.grams,
-                days: weekdays,
-            });
+            try {
+                const result = await api.createSchedule({
+                    deviceId,
+                    petId,
+                    hour,
+                    minute,
+                    amount: dose.grams,
+                    days: weekdays,
+                });
 
-            if (result.success) {
-                successCount++;
-            } else {
-                errorCount++;
+                if (result.success) {
+                    successCount++;
+                } else {
+                    errorMessages.push(result.error || `Erro às ${timeValue}`);
+                }
+            } catch (err) {
+                errorMessages.push(err.message || `Erro às ${timeValue}`);
             }
         }
 
@@ -914,8 +918,9 @@ async function addSchedule() {
             await loadSchedules();
         }
 
-        if (errorCount > 0) {
-            showToast(`${errorCount} horário(s) não puderam ser criados`, 'error');
+        if (errorMessages.length > 0) {
+            // Mostra erros específicos (ex: "Já existe horário às 08:00")
+            errorMessages.forEach(msg => showToast(msg, 'error'));
         }
     } catch (error) {
         console.error('Add schedule error:', error);
