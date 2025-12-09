@@ -100,8 +100,9 @@ async function loadAllData() {
         loadPets(),
         loadSchedules(),
         loadHistory(),
-        loadDeviceToken(),
     ]);
+    // Mostra email do usuário após carregar dados
+    loadUserEmail();
 }
 
 async function loadDevices() {
@@ -987,30 +988,24 @@ function getTriggerLabel(trigger) {
 // DEVICE TOKEN
 // ===================================
 
-async function loadDeviceToken() {
-    try {
-        const result = await api.getDeviceToken();
-        if (result.success && result.data.deviceToken) {
-            const tokenInput = document.getElementById('deviceToken');
-            if (tokenInput) {
-                tokenInput.value = result.data.deviceToken;
-            }
-        }
-    } catch (error) {
-        console.error('Error loading device token:', error);
+// Mostra o email do usuário para configurar ESP32
+function loadUserEmail() {
+    const emailInput = document.getElementById('userEmail');
+    if (emailInput && state.user && state.user.email) {
+        emailInput.value = state.user.email;
     }
 }
 
-function copyDeviceToken() {
-    const tokenInput = document.getElementById('deviceToken');
-    if (tokenInput && tokenInput.value) {
-        navigator.clipboard.writeText(tokenInput.value).then(() => {
-            showToast('Token copiado!', 'success');
+function copyUserEmail() {
+    const emailInput = document.getElementById('userEmail');
+    if (emailInput && emailInput.value) {
+        navigator.clipboard.writeText(emailInput.value).then(() => {
+            showToast('Email copiado!', 'success');
         }).catch(err => {
             // Fallback for older browsers
-            tokenInput.select();
+            emailInput.select();
             document.execCommand('copy');
-            showToast('Token copiado!', 'success');
+            showToast('Email copiado!', 'success');
         });
     }
 }
