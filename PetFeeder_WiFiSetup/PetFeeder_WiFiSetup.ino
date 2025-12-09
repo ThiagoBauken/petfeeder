@@ -69,6 +69,7 @@ DNSServer dnsServer;
 String savedSSID = "";
 String savedPassword = "";
 String deviceId = "";
+String userEmail = "";
 
 // Gera ID unico baseado no MAC Address
 String getDeviceId() {
@@ -157,21 +158,53 @@ void loadConfig() {
   preferences.begin("petfeeder", false);
   savedSSID = preferences.getString("ssid", "");
   savedPassword = preferences.getString("password", "");
-  deviceId = preferences.getString("deviceId", "");
+  deviceId = getDeviceId(); // Sempre usa o ID baseado no MAC
+  userEmail = preferences.getString("email", "");
 
   Serial.println("\nConfiguracoes carregadas:");
   Serial.println("SSID: " + (savedSSID.length() > 0 ? savedSSID : "(nao configurado)"));
-  Serial.println("Device ID: " + (deviceId.length() > 0 ? deviceId : "(nao configurado)"));
+  Serial.println("Device ID: " + deviceId);
+  Serial.println("Email: " + (userEmail.length() > 0 ? userEmail : "(nao configurado)"));
 }
 
-void saveConfig(String ssid, String password, String devId) {
+void saveConfig(String ssid, String password, String email) {
   preferences.putString("ssid", ssid);
   preferences.putString("password", password);
-  preferences.putString("deviceId", devId);
+  preferences.putString("email", email);
   savedSSID = ssid;
   savedPassword = password;
-  deviceId = devId;
+  userEmail = email;
+  deviceId = getDeviceId();
   Serial.println("Configuracoes salvas!");
+}
+
+// Registra dispositivo automaticamente no servidor
+void registerDevice() {
+  if (userEmail.length() == 0) return;
+
+  Serial.println("\nRegistrando dispositivo no servidor...");
+
+  HTTPClient http;
+  String url = serverUrl + "/api/devices/auto-register";
+  http.begin(url);
+  http.addHeader("Content-Type", "application/json");
+  http.setTimeout(10000);
+
+  String json = "{\"deviceId\":\"" + deviceId + "\",\"email\":\"" + userEmail + "\",\"name\":\"PetFeeder " + deviceId.substring(3) + "\"}";
+
+  Serial.println("Enviando: " + json);
+
+  int httpCode = http.POST(json);
+
+  if (httpCode == 200 || httpCode == 201) {
+    Serial.println("Dispositivo registrado com sucesso!");
+  } else {
+    String response = http.getString();
+    Serial.println("Erro ao registrar: " + String(httpCode));
+    Serial.println("Resposta: " + response);
+  }
+
+  http.end();
 }
 
 void clearConfig() {
@@ -369,21 +402,22 @@ void handleRoot() {
 
     <div class="device-id-box">
       <h3>ID DO DISPOSITIVO</h3>
-      <div class="id" id="deviceIdDisplay">)rawliteral" + devId + R"rawliteral(</div>
-      <p>Use este ID no site para vincular</p>
-      <button class="copy-btn" onclick="copyId()">Copiar ID</button>
+      <div class="id">)rawliteral" + devId + R"rawliteral(</div>
+      <p>Sera vinculado automaticamente a sua conta</p>
     </div>
 
     <div id="form">
-      <button class="scan-btn" onclick="scanNetworks()">Buscar Redes WiFi</button>
-      <div id="networks" class="networks"></div>
       <form id="configForm" onsubmit="saveConfig(event)">
+        <label>Email da sua conta PetFeeder</label>
+        <input type="email" id="email" placeholder="seu@email.com" required>
+        <hr style="border:none;border-top:1px solid #eee;margin:20px 0">
+        <button type="button" class="scan-btn" onclick="scanNetworks()">Buscar Redes WiFi</button>
+        <div id="networks" class="networks"></div>
         <label>Rede WiFi</label>
         <input type="text" id="ssid" placeholder="Selecione acima ou digite" required>
         <label>Senha WiFi</label>
         <input type="password" id="password" placeholder="Senha da rede" required>
-        <input type="hidden" id="deviceId" value=")rawliteral" + devId + R"rawliteral(">
-        <button type="submit">Conectar</button>
+        <button type="submit">Conectar e Vincular</button>
       </form>
     </div>
     <div id="loading" class="loading" style="display:none">
@@ -392,16 +426,11 @@ void handleRoot() {
     </div>
     <div id="success" class="success" style="display:none">
       <h2>Configurado!</h2>
-      <p>O ESP32 vai reiniciar e conectar ao WiFi.</p>
-      <p style="margin-top:10px;font-size:14px">Agora va ao site e vincule o dispositivo com o ID:</p>
-      <p style="font-size:20px;font-weight:bold;margin-top:5px">)rawliteral" + devId + R"rawliteral(</p>
+      <p>O ESP32 vai reiniciar, conectar ao WiFi e vincular automaticamente na sua conta.</p>
+      <p style="margin-top:10px;font-size:14px">Acesse o site para criar seus horarios de alimentacao!</p>
     </div>
   </div>
   <script>
-    function copyId(){
-      navigator.clipboard.writeText(')rawliteral" + devId + R"rawliteral(');
-      alert('ID copiado!');
-    }
     function scanNetworks(){
       document.getElementById('networks').innerHTML='<div class="loading"><div class="spinner"></div><p>Buscando...</p></div>';
       fetch('/scan').then(r=>r.json()).then(data=>{
@@ -418,7 +447,7 @@ void handleRoot() {
       const data=new URLSearchParams();
       data.append('ssid',document.getElementById('ssid').value);
       data.append('password',document.getElementById('password').value);
-      data.append('deviceId',document.getElementById('deviceId').value);
+      data.append('email',document.getElementById('email').value);
       fetch('/save',{method:'POST',body:data}).then(r=>r.json()).then(data=>{
         document.getElementById('loading').style.display='none';
         document.getElementById('success').style.display='block';
@@ -450,13 +479,13 @@ void handleScan() {
 void handleSave() {
   String ssid = webServer.arg("ssid");
   String password = webServer.arg("password");
-  String devId = webServer.arg("deviceId");
+  String email = webServer.arg("email");
 
   Serial.println("\nSalvando configuracoes...");
   Serial.println("SSID: " + ssid);
-  Serial.println("Device ID: " + devId);
+  Serial.println("Email: " + email);
 
-  saveConfig(ssid, password, devId);
+  saveConfig(ssid, password, email);
   webServer.send(200, "application/json", "{\"success\":true}");
 
   delay(2000);
@@ -571,6 +600,10 @@ void setup() {
       Serial.println("IP: " + WiFi.localIP().toString());
 
       configTime(-3 * 3600, 0, "pool.ntp.org");
+
+      // Registra dispositivo automaticamente na conta do usuario
+      registerDevice();
+
       fetchSchedules();
       normalMode();
       return;

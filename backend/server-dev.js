@@ -471,6 +471,58 @@ app.post('/api/devices/link', authMiddleware, (req, res) => {
   );
 });
 
+// Auto-registrar dispositivo pelo ESP32 (usando email)
+app.post('/api/devices/auto-register', (req, res) => {
+  const { deviceId, email, name } = req.body;
+
+  if (!deviceId || !email) {
+    return res.status(400).json({ success: false, message: 'deviceId e email obrigatórios' });
+  }
+
+  // Busca o usuário pelo email
+  db.get('SELECT id FROM users WHERE email = ?', [email.toLowerCase()], (err, user) => {
+    if (err) {
+      return res.status(500).json({ success: false, message: 'Erro no servidor' });
+    }
+
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'Email não encontrado. Crie uma conta primeiro no site.' });
+    }
+
+    const deviceName = name || `PetFeeder ${deviceId.slice(-6)}`;
+
+    // Verifica se já existe
+    db.get('SELECT id FROM devices WHERE device_id = ?', [deviceId], (err, existing) => {
+      if (existing) {
+        // Atualiza o user_id se o dispositivo já existe
+        db.run('UPDATE devices SET user_id = ?, name = ?, status = ? WHERE device_id = ?',
+          [user.id, deviceName, 'online', deviceId],
+          (err) => {
+            if (err) {
+              return res.status(500).json({ success: false, message: 'Erro ao atualizar dispositivo' });
+            }
+            console.log(`Dispositivo ${deviceId} re-vinculado ao usuário ${email}`);
+            res.json({ success: true, message: 'Dispositivo atualizado' });
+          }
+        );
+      } else {
+        // Cria novo dispositivo
+        db.run(
+          'INSERT INTO devices (user_id, device_id, name, status) VALUES (?, ?, ?, ?)',
+          [user.id, deviceId, deviceName, 'online'],
+          function(err) {
+            if (err) {
+              return res.status(500).json({ success: false, message: 'Erro ao vincular dispositivo' });
+            }
+            console.log(`Dispositivo ${deviceId} vinculado ao usuário ${email}`);
+            res.json({ success: true, message: 'Dispositivo vinculado com sucesso' });
+          }
+        );
+      }
+    });
+  });
+});
+
 // ========================================
 // ROTAS DE PETS
 // ========================================
