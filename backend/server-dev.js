@@ -660,6 +660,60 @@ app.post('/api/pets', authMiddleware, (req, res) => {
   );
 });
 
+// Atualizar pet
+app.put('/api/pets/:id', authMiddleware, (req, res) => {
+  const petId = req.params.id;
+  const { name, type, deviceId, compartment, dailyAmount } = req.body;
+
+  const updates = [];
+  const values = [];
+
+  if (name) { updates.push('name = ?'); values.push(name); }
+  if (type) { updates.push('type = ?'); values.push(type); }
+  if (deviceId) { updates.push('device_id = ?'); values.push(deviceId); }
+  if (compartment !== undefined) { updates.push('compartment = ?'); values.push(compartment); }
+  if (dailyAmount) { updates.push('daily_amount = ?'); values.push(dailyAmount); }
+
+  if (updates.length === 0) {
+    return res.status(400).json({ success: false, message: 'Nenhum dado para atualizar' });
+  }
+
+  values.push(petId, req.userId);
+
+  db.run(
+    `UPDATE pets SET ${updates.join(', ')} WHERE id = ? AND user_id = ?`,
+    values,
+    function(err) {
+      if (err) {
+        return res.status(500).json({ success: false, message: 'Erro ao atualizar pet' });
+      }
+      if (this.changes === 0) {
+        return res.status(404).json({ success: false, message: 'Pet não encontrado' });
+      }
+      res.json({ success: true, message: 'Pet atualizado' });
+    }
+  );
+});
+
+// Excluir pet
+app.delete('/api/pets/:id', authMiddleware, (req, res) => {
+  const petId = req.params.id;
+
+  db.run(
+    'DELETE FROM pets WHERE id = ? AND user_id = ?',
+    [petId, req.userId],
+    function(err) {
+      if (err) {
+        return res.status(500).json({ success: false, message: 'Erro ao excluir pet' });
+      }
+      if (this.changes === 0) {
+        return res.status(404).json({ success: false, message: 'Pet não encontrado' });
+      }
+      res.json({ success: true, message: 'Pet excluído' });
+    }
+  );
+});
+
 // ========================================
 // ROTAS DE ALIMENTAÇÃO
 // ========================================
@@ -816,6 +870,51 @@ app.post('/api/schedules', authMiddleware, (req, res) => {
             days,
             active: true
           });
+        }
+      );
+    }
+  );
+});
+
+// Atualizar horário
+app.put('/api/schedules/:id', authMiddleware, (req, res) => {
+  const scheduleId = req.params.id;
+  const { hour, minute, amount, days, active } = req.body;
+
+  // Verificar se horário pertence ao usuário
+  db.get(
+    `SELECT s.* FROM schedules s
+     JOIN pets p ON s.pet_id = p.id
+     WHERE s.id = ? AND p.user_id = ?`,
+    [scheduleId, req.userId],
+    (err, schedule) => {
+      if (err || !schedule) {
+        return res.status(404).json({ error: 'Horário não encontrado' });
+      }
+
+      const updates = [];
+      const values = [];
+
+      if (hour !== undefined) { updates.push('hour = ?'); values.push(hour); }
+      if (minute !== undefined) { updates.push('minute = ?'); values.push(minute); }
+      if (amount !== undefined) { updates.push('amount = ?'); values.push(amount); }
+      if (days !== undefined) { updates.push('days = ?'); values.push(days); }
+      if (active !== undefined) { updates.push('active = ?'); values.push(active ? 1 : 0); }
+
+      if (updates.length === 0) {
+        return res.status(400).json({ success: false, message: 'Nenhum dado para atualizar' });
+      }
+
+      values.push(scheduleId);
+
+      db.run(
+        `UPDATE schedules SET ${updates.join(', ')} WHERE id = ?`,
+        values,
+        function(err) {
+          if (err) {
+            return res.status(500).json({ success: false, message: 'Erro ao atualizar horário' });
+          }
+          res.json({ success: true, message: 'Horário atualizado' });
         }
       );
     }
