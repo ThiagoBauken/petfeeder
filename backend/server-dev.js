@@ -649,7 +649,7 @@ app.post('/api/devices/:id/restart', authMiddleware, (req, res) => {
 // Listar pets
 app.get('/api/pets', authMiddleware, (req, res) => {
   db.all(
-    `SELECT p.*, d.name as device_name, d.device_id
+    `SELECT p.*, d.id as device_db_id, d.name as device_name, d.device_id as device_code
      FROM pets p
      JOIN devices d ON p.device_id = d.id
      WHERE p.user_id = ?`,
