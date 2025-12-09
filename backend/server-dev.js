@@ -649,7 +649,8 @@ app.post('/api/devices/:id/restart', authMiddleware, (req, res) => {
 // Listar pets
 app.get('/api/pets', authMiddleware, (req, res) => {
   db.all(
-    `SELECT p.*, d.id as device_db_id, d.name as device_name, d.device_id as device_code
+    `SELECT p.id, p.name, p.type, p.compartment, p.daily_amount,
+            p.device_id, d.name as device_name, d.device_id as device_code
      FROM pets p
      JOIN devices d ON p.device_id = d.id
      WHERE p.user_id = ?`,
@@ -770,9 +771,12 @@ app.post('/api/feed/now', authMiddleware, (req, res) => {
     return res.status(400).json({ error: 'Dados incompletos' });
   }
 
-  // Verificar se pet pertence ao usuário
+  // Verificar se pet pertence ao usuário e buscar device_id string
   db.get(
-    'SELECT * FROM pets WHERE id = ? AND user_id = ?',
+    `SELECT p.*, d.device_id as esp_device_id, d.id as device_db_id
+     FROM pets p
+     JOIN devices d ON p.device_id = d.id
+     WHERE p.id = ? AND p.user_id = ?`,
     [petId, req.userId],
     (err, pet) => {
       if (err || !pet) {
@@ -785,20 +789,23 @@ app.post('/api/feed/now', authMiddleware, (req, res) => {
       else if (amount <= 100) size = 'medium';
       else size = 'large';
 
+      // Usar o device_id string (ex: PF_2FCC9C) para o ESP32
+      const espDeviceId = pet.esp_device_id;
+
       // Adicionar comando à fila para o ESP32 buscar
-      const commands = deviceCommands.get(deviceId) || [];
+      const commands = deviceCommands.get(espDeviceId) || [];
       commands.push({
         command: 'feed',
         size: size
       });
-      deviceCommands.set(deviceId, commands);
+      deviceCommands.set(espDeviceId, commands);
 
-      console.log(`📤 Comando de alimentação enfileirado para ${deviceId}: ${size} (${amount}g)`);
+      console.log(`📤 Comando de alimentação enfileirado para ${espDeviceId}: ${size} (${amount}g)`);
 
-      // Registrar alimentação
+      // Registrar alimentação (usando o ID do banco para a FK)
       db.run(
         'INSERT INTO feeding_history (pet_id, device_id, amount, trigger_type) VALUES (?, ?, ?, ?)',
-        [petId, deviceId, amount, 'manual'],
+        [petId, pet.device_db_id, amount, 'manual'],
         function(err) {
           if (err) {
             return res.status(500).json({ error: 'Erro ao registrar alimentação' });
@@ -829,7 +836,12 @@ app.post('/api/feed/now', authMiddleware, (req, res) => {
 // Histórico de alimentação
 app.get('/api/feed/history', authMiddleware, (req, res) => {
   db.all(
-    `SELECT fh.*, p.name as pet_name, d.name as device_name
+    `SELECT fh.id, fh.pet_id, fh.amount,
+            fh.trigger_type as trigger,
+            fh.created_at as timestamp,
+            p.name as pet_name,
+            d.name as device_name,
+            d.device_id as device_id
      FROM feeding_history fh
      JOIN pets p ON fh.pet_id = p.id
      JOIN devices d ON fh.device_id = d.id
@@ -841,7 +853,12 @@ app.get('/api/feed/history', authMiddleware, (req, res) => {
       if (err) {
         return res.status(500).json({ success: false, message: 'Erro ao buscar histórico' });
       }
-      res.json({ success: true, data: history || [] });
+      // Adicionar status success para cada item
+      const formattedHistory = (history || []).map(h => ({
+        ...h,
+        status: 'success'
+      }));
+      res.json({ success: true, data: formattedHistory });
     }
   );
 });
@@ -849,7 +866,12 @@ app.get('/api/feed/history', authMiddleware, (req, res) => {
 // Alias para /api/feedings (usado pelo frontend)
 app.get('/api/feedings', authMiddleware, (req, res) => {
   db.all(
-    `SELECT fh.*, p.name as pet_name, d.name as device_name
+    `SELECT fh.id, fh.pet_id, fh.amount,
+            fh.trigger_type as trigger,
+            fh.created_at as timestamp,
+            p.name as pet_name,
+            d.name as device_name,
+            d.device_id as device_id
      FROM feeding_history fh
      JOIN pets p ON fh.pet_id = p.id
      JOIN devices d ON fh.device_id = d.id
@@ -884,11 +906,20 @@ app.get('/api/schedules', authMiddleware, (req, res) => {
         return res.status(500).json({ success: false, message: 'Erro ao buscar horários' });
       }
 
-      // Converter days de string para array
-      const schedulesFormatted = (schedules || []).map(s => ({
-        ...s,
-        days: JSON.parse(s.days)
-      }));
+      // Converter days de string JSON para propriedades individuais
+      const schedulesFormatted = (schedules || []).map(s => {
+        const days = JSON.parse(s.days || '{}');
+        return {
+          ...s,
+          monday: days.monday || false,
+          tuesday: days.tuesday || false,
+          wednesday: days.wednesday || false,
+          thursday: days.thursday || false,
+          friday: days.friday || false,
+          saturday: days.saturday || false,
+          sunday: days.sunday || false,
+        };
+      });
 
       res.json({ success: true, data: schedulesFormatted });
     }
