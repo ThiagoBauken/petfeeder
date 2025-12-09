@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Flash ESP32 - PetFeeder</title>
+    <script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            min-height: 100vh;
+            color: #fff;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 40px;
+        }
+
+        header h1 {
+            font-size: 2.5rem;
+            margin-bottom: 10px;
+        }
+
+        header p {
+            color: #888;
+            font-size: 1.1rem;
+        }
+
+        .flash-card {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 20px;
+            padding: 40px;
+            text-align: center;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .flash-icon {
+            font-size: 80px;
+            margin-bottom: 20px;
+        }
+
+        .flash-card h2 {
+            margin-bottom: 20px;
+            font-size: 1.8rem;
+        }
+
+        .flash-card p {
+            color: #aaa;
+            margin-bottom: 30px;
+            line-height: 1.6;
+        }
+
+        esp-web-install-button {
+            --inst-button-color: #4CAF50;
+        }
+
+        esp-web-install-button button {
+            background: linear-gradient(135deg, #4CAF50, #45a049);
+            color: white;
+            border: none;
+            padding: 15px 40px;
+            font-size: 1.2rem;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        esp-web-install-button button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 30px rgba(76, 175, 80, 0.3);
+        }
+
+        .steps {
+            margin-top: 40px;
+            text-align: left;
+        }
+
+        .steps h3 {
+            margin-bottom: 20px;
+            color: #4CAF50;
+        }
+
+        .step {
+            display: flex;
+            align-items: flex-start;
+            margin-bottom: 15px;
+            padding: 15px;
+            background: rgba(255, 255, 255, 0.03);
+            border-radius: 10px;
+        }
+
+        .step-number {
+            background: #4CAF50;
+            color: white;
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-right: 15px;
+            flex-shrink: 0;
+            font-weight: bold;
+        }
+
+        .step-content h4 {
+            margin-bottom: 5px;
+        }
+
+        .step-content p {
+            color: #888;
+            font-size: 0.9rem;
+            margin: 0;
+        }
+
+        .warning {
+            background: rgba(255, 193, 7, 0.1);
+            border: 1px solid rgba(255, 193, 7, 0.3);
+            border-radius: 10px;
+            padding: 20px;
+            margin-top: 30px;
+        }
+
+        .warning h4 {
+            color: #FFC107;
+            margin-bottom: 10px;
+        }
+
+        .warning ul {
+            color: #aaa;
+            margin-left: 20px;
+        }
+
+        .warning li {
+            margin-bottom: 5px;
+        }
+
+        .back-link {
+            display: inline-block;
+            margin-top: 30px;
+            color: #4CAF50;
+            text-decoration: none;
+        }
+
+        .back-link:hover {
+            text-decoration: underline;
+        }
+
+        .browser-warning {
+            display: none;
+            background: rgba(244, 67, 54, 0.1);
+            border: 1px solid rgba(244, 67, 54, 0.3);
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 30px;
+        }
+
+        .browser-warning.show {
+            display: block;
+        }
+
+        .browser-warning h4 {
+            color: #f44336;
+            margin-bottom: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Flash ESP32</h1>
+            <p>Grave o firmware PetFeeder diretamente pelo navegador</p>
+        </header>
+
+        <div class="browser-warning" id="browserWarning">
+            <h4>Navegador Incompativel</h4>
+            <p>O Web Serial API requer <strong>Google Chrome</strong>, <strong>Microsoft Edge</strong> ou <strong>Opera</strong> em desktop.</p>
+            <p>Safari e Firefox nao sao suportados.</p>
+        </div>
+
+        <div class="flash-card">
+            <div class="flash-icon">🔌</div>
+            <h2>Instalar Firmware PetFeeder</h2>
+            <p>
+                Conecte seu ESP32 via cabo USB e clique no botao abaixo.<br>
+                O firmware sera baixado e gravado automaticamente.
+            </p>
+
+            <esp-web-install-button manifest="/firmware/manifest.json">
+                <button slot="activate">Instalar Firmware</button>
+                <span slot="unsupported">
+                    <button disabled style="background: #666; cursor: not-allowed;">
+                        Navegador nao suportado
+                    </button>
+                </span>
+                <span slot="not-allowed">
+                    <button disabled style="background: #666; cursor: not-allowed;">
+                        Acesso negado - use HTTPS
+                    </button>
+                </span>
+            </esp-web-install-button>
+
+            <div class="steps">
+                <h3>Como funciona:</h3>
+
+                <div class="step">
+                    <div class="step-number">1</div>
+                    <div class="step-content">
+                        <h4>Conecte o ESP32</h4>
+                        <p>Use um cabo USB de dados (nao apenas de carga)</p>
+                    </div>
+                </div>
+
+                <div class="step">
+                    <div class="step-number">2</div>
+                    <div class="step-content">
+                        <h4>Clique em "Instalar Firmware"</h4>
+                        <p>O navegador vai pedir para selecionar a porta serial</p>
+                    </div>
+                </div>
+
+                <div class="step">
+                    <div class="step-number">3</div>
+                    <div class="step-content">
+                        <h4>Selecione a porta COM</h4>
+                        <p>Geralmente aparece como "CP2102" ou "CH340"</p>
+                    </div>
+                </div>
+
+                <div class="step">
+                    <div class="step-number">4</div>
+                    <div class="step-content">
+                        <h4>Aguarde o flash (~60 segundos)</h4>
+                        <p>O ESP32 sera reiniciado automaticamente</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="warning">
+                <h4>Requisitos:</h4>
+                <ul>
+                    <li>Google Chrome, Edge ou Opera (desktop)</li>
+                    <li>Driver USB instalado (CP2102 ou CH340)</li>
+                    <li>Cabo USB de dados</li>
+                    <li>ESP32 DevKit</li>
+                </ul>
+            </div>
+        </div>
+
+        <a href="dashboard.html" class="back-link">← Voltar ao Dashboard</a>
+    </div>
+
+    <script>
+        // Check browser support
+        if (!('serial' in navigator)) {
+            document.getElementById('browserWarning').classList.add('show');
+        }
+    </script>
+</body>
+</html>
