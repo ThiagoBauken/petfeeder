@@ -990,18 +990,23 @@ app.post('/api/schedules', authMiddleware, (req, res) => {
         [petId, deviceId, hour, minute, amount, JSON.stringify(days)],
         function(err) {
           if (err) {
-            return res.status(500).json({ error: 'Erro ao criar horário' });
+            console.error('[SCHEDULES] Erro ao criar:', err);
+            return res.status(500).json({ success: false, error: 'Erro ao criar horário' });
           }
 
+          console.log(`[SCHEDULES] Criado: ${hour}:${minute} para pet ${petId}`);
           res.json({
-            id: this.lastID,
-            pet_id: petId,
-            device_id: deviceId,
-            hour,
-            minute,
-            amount,
-            days,
-            active: true
+            success: true,
+            data: {
+              id: this.lastID,
+              pet_id: petId,
+              device_id: deviceId,
+              hour,
+              minute,
+              amount,
+              days,
+              active: true
+            }
           });
         }
       );
