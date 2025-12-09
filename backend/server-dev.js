@@ -779,6 +779,22 @@ app.post('/api/feed/now', authMiddleware, (req, res) => {
         return res.status(404).json({ error: 'Pet não encontrado' });
       }
 
+      // Converter amount para size
+      let size = 'medium';
+      if (amount <= 50) size = 'small';
+      else if (amount <= 100) size = 'medium';
+      else size = 'large';
+
+      // Adicionar comando à fila para o ESP32 buscar
+      const commands = deviceCommands.get(deviceId) || [];
+      commands.push({
+        command: 'feed',
+        size: size
+      });
+      deviceCommands.set(deviceId, commands);
+
+      console.log(`📤 Comando de alimentação enfileirado para ${deviceId}: ${size} (${amount}g)`);
+
       // Registrar alimentação
       db.run(
         'INSERT INTO feeding_history (pet_id, device_id, amount, trigger_type) VALUES (?, ?, ?, ?)',
@@ -801,7 +817,7 @@ app.post('/api/feed/now', authMiddleware, (req, res) => {
 
           res.json({
             success: true,
-            message: `Alimentação de ${amount}g para ${pet.name} iniciada (SIMULADO)`,
+            message: `Alimentação de ${amount}g para ${pet.name} enviada ao dispositivo!`,
             feedingId: this.lastID
           });
         }

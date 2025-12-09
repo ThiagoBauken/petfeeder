@@ -540,7 +540,7 @@
     <div id="toast" class="toast"></div>
 
     <!-- Scripts -->
-    <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
     <script src="js/config.js"></script>
     <script src="js/api.js"></script>
     <script src="js/websocket.js"></script>
@@ -552,15 +552,14 @@
             if (wifiQR && typeof QRCode !== 'undefined') {
                 // Formato padrao WiFi QR: WIFI:T:WPA;S:SSID;P:PASSWORD;;
                 const wifiString = 'WIFI:T:WPA;S:PetFeeder-Setup;P:12345678;;';
-                QRCode.toCanvas(document.createElement('canvas'), wifiString, {
+                wifiQR.innerHTML = '';
+                new QRCode(wifiQR, {
+                    text: wifiString,
                     width: 120,
-                    margin: 0,
-                    color: { dark: '#667eea', light: '#ffffff' }
-                }, function(error, canvas) {
-                    if (!error) {
-                        wifiQR.innerHTML = '';
-                        wifiQR.appendChild(canvas);
-                    }
+                    height: 120,
+                    colorDark: '#667eea',
+                    colorLight: '#ffffff',
+                    correctLevel: QRCode.CorrectLevel.L
                 });
             }
         });
