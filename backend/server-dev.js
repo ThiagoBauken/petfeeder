@@ -151,7 +151,13 @@ app.use(cors());
 app.use(express.json());
 
 // Servir frontend estático
-app.use(express.static(path.join(__dirname, '..', 'frontend')));
+// Em produção: ./public (dentro do container)
+// Em dev: ../frontend (pasta local)
+const publicPath = IS_PRODUCTION
+  ? path.join(__dirname, 'public')
+  : path.join(__dirname, '..', 'frontend');
+app.use(express.static(publicPath));
+console.log(`📁 Frontend: ${publicPath}`);
 
 // Middleware de logging
 app.use((req, res, next) => {
@@ -956,6 +962,34 @@ app.get('/api/devices/:deviceId/schedules', (req, res) => {
       }
     );
   });
+});
+
+// ========================================
+// HEALTH CHECK
+// ========================================
+
+app.get('/health', (req, res) => {
+  res.json({
+    success: true,
+    status: 'healthy',
+    timestamp: new Date().toISOString(),
+    service: 'PetFeeder Backend',
+    version: '1.0.0',
+    environment: IS_PRODUCTION ? 'production' : 'development'
+  });
+});
+
+// ========================================
+// CATCH-ALL - Servir frontend para rotas não-API
+// ========================================
+
+app.get('*', (req, res) => {
+  // Se não for rota de API, servir login.html
+  if (!req.path.startsWith('/api/')) {
+    res.sendFile(path.join(publicPath, 'login.html'));
+  } else {
+    res.status(404).json({ success: false, message: 'Rota não encontrada' });
+  }
 });
 
 // ========================================
