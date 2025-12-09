@@ -739,6 +739,55 @@ async function deletePet(petId, petName) {
     }
 }
 
+function editPet(petId) {
+    const pet = state.pets.find(p => p.id === petId);
+    if (!pet) {
+        showToast('Pet não encontrado', 'error');
+        return;
+    }
+
+    document.getElementById('editPetId').value = petId;
+    document.getElementById('editPetName').value = pet.name || '';
+    document.getElementById('editPetType').value = pet.type || 'dog';
+    document.getElementById('editPetCompartment').value = pet.compartment || 1;
+    document.getElementById('editPetDailyAmount').value = pet.daily_amount || 100;
+
+    showModal('editPetModal');
+}
+
+async function saveEditPet() {
+    const petId = document.getElementById('editPetId').value;
+    const name = document.getElementById('editPetName').value.trim();
+    const type = document.getElementById('editPetType').value;
+    const compartment = parseInt(document.getElementById('editPetCompartment').value);
+    const dailyAmount = parseInt(document.getElementById('editPetDailyAmount').value) || 100;
+
+    if (!name) {
+        showToast('Nome é obrigatório', 'error');
+        return;
+    }
+
+    try {
+        const result = await api.updatePet(petId, {
+            name,
+            type,
+            compartment,
+            dailyAmount
+        });
+
+        if (result.success) {
+            showToast('Pet atualizado!', 'success');
+            closeAllModals();
+            await loadPets();
+        } else {
+            showToast(result.message || 'Erro ao atualizar pet', 'error');
+        }
+    } catch (error) {
+        console.error('Edit pet error:', error);
+        showToast(error.message || 'Erro ao atualizar pet', 'error');
+    }
+}
+
 async function addSchedule() {
     const petId = parseInt(document.getElementById('schedulePetSelect').value);
     const timeValue = document.getElementById('scheduleTime').value;
