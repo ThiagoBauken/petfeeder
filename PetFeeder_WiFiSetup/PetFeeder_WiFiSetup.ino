@@ -45,7 +45,7 @@ String serverUrl = "https://telegram-petfeeder.pbzgje.easypanel.host";
 #define MOTOR_IN4 19
 
 // Pinos do Sensor HC-SR04
-#define TRIG_PIN 23
+#define TRIG_PIN 26
 #define ECHO_PIN 25
 
 // LED e Botao
