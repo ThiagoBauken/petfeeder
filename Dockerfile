@@ -18,7 +18,7 @@ COPY backend/ .
 # Copy frontend to nginx
 COPY frontend/ /usr/share/nginx/html/
 
-# Create nginx config for API proxy
+# Create nginx config for API + WebSocket proxy
 RUN echo 'server { \
     listen 80; \
     root /usr/share/nginx/html; \
@@ -26,6 +26,7 @@ RUN echo 'server { \
     location /health { return 200 "ok"; add_header Content-Type text/plain; } \
     location / { try_files $uri $uri/ /login.html; } \
     location /api/ { proxy_pass http://127.0.0.1:3000/api/; proxy_http_version 1.1; proxy_set_header Host $host; } \
+    location /ws { proxy_pass http://127.0.0.1:8081; proxy_http_version 1.1; proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade"; proxy_set_header Host $host; } \
 }' > /etc/nginx/http.d/default.conf
 
 # Create start script
