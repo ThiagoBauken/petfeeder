@@ -541,28 +541,37 @@ function renderDevicesList() {
         return;
     }
 
-    container.innerHTML = state.devices.map(device => `
-        <div class="card">
+    container.innerHTML = state.devices.map(device => {
+        const isOnline = device.is_online || device.online;
+        const statusClass = isOnline ? 'success' : 'danger';
+        const statusText = isOnline ? 'Online' : 'Offline';
+        const statusIcon = isOnline ? 'fa-circle' : 'fa-exclamation-circle';
+
+        return `
+        <div class="card device-card ${!isOnline ? 'device-offline' : ''}">
             <div style="display: flex; justify-content: space-between; align-items: center;">
                 <div>
-                    <h3 style="margin: 0;">
+                    <h3 style="margin: 0; display: flex; align-items: center; gap: 10px;">
                         ${device.name}
-                        <span class="badge badge-${device.online ? 'success' : 'secondary'}">
-                            ${device.online ? 'Online' : 'Offline'}
+                        <span class="device-status device-status-${statusClass}">
+                            <i class="fas ${statusIcon}"></i> ${statusText}
                         </span>
                     </h3>
                     <p style="margin: 5px 0; color: #666;">
-                        ID: ${device.device_id} • ${device.pet_count || 0} pets
+                        ID: ${device.device_id}
+                        ${device.food_level !== undefined ? ` • Ração: ${device.food_level}%` : ''}
                     </p>
-                    <p style="margin: 5px 0; color: #666; font-size: 12px;">
-                        ${device.last_seen ? `Visto: ${new Date(device.last_seen).toLocaleString('pt-BR')}` : ''}
+                    <p style="margin: 5px 0; color: ${isOnline ? '#666' : '#dc3545'}; font-size: 12px;">
+                        ${device.last_seen_ago ? `Visto ${device.last_seen_ago}` : (device.last_seen ? `Visto: ${new Date(device.last_seen).toLocaleString('pt-BR')}` : 'Nunca conectado')}
+                        ${device.ip_address ? ` • IP: ${device.ip_address}` : ''}
                     </p>
+                    ${!isOnline ? '<p style="margin: 5px 0; color: #dc3545; font-size: 12px;"><i class="fas fa-exclamation-triangle"></i> Dispositivo pode estar desligado ou sem conexão</p>' : ''}
                 </div>
                 <div style="display: flex; gap: 10px;">
                     <button class="btn btn-sm btn-primary" onclick="showEditDeviceModal(${device.id}, '${device.name}')">
                         <i class="fas fa-edit"></i> Editar
                     </button>
-                    <button class="btn btn-sm btn-secondary" onclick="restartDevice(${device.id})">
+                    <button class="btn btn-sm btn-secondary" onclick="restartDevice(${device.id})" ${!isOnline ? 'disabled title="Dispositivo offline"' : ''}>
                         <i class="fas fa-sync"></i> Reiniciar
                     </button>
                     <button class="btn btn-sm btn-danger" onclick="unlinkDevice(${device.id}, '${device.name}')">
@@ -571,7 +580,7 @@ function renderDevicesList() {
                 </div>
             </div>
         </div>
-    `).join('');
+    `}).join('');
 }
 
 // ===================================

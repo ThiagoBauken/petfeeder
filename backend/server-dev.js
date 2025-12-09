@@ -64,6 +64,10 @@ db.serialize(() => {
       device_id TEXT UNIQUE NOT NULL,
       name TEXT NOT NULL,
       status TEXT DEFAULT 'offline',
+      food_level INTEGER DEFAULT 0,
+      last_seen DATETIME,
+      ip_address TEXT,
+      rssi INTEGER,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (user_id) REFERENCES users(id)
     )
@@ -115,6 +119,12 @@ db.serialize(() => {
       FOREIGN KEY (device_id) REFERENCES devices(id)
     )
   `);
+
+  // Migrações para adicionar novas colunas em bancos existentes
+  db.run(`ALTER TABLE devices ADD COLUMN food_level INTEGER DEFAULT 0`, () => {});
+  db.run(`ALTER TABLE devices ADD COLUMN last_seen DATETIME`, () => {});
+  db.run(`ALTER TABLE devices ADD COLUMN ip_address TEXT`, () => {});
+  db.run(`ALTER TABLE devices ADD COLUMN rssi INTEGER`, () => {});
 
   console.log('✅ Tabelas verificadas/criadas');
 });
@@ -425,6 +435,8 @@ app.post('/api/devices/register', (req, res) => {
 
 // Listar dispositivos
 app.get('/api/devices', authMiddleware, (req, res) => {
+  const OFFLINE_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutos
+
   db.all(
     'SELECT * FROM devices WHERE user_id = ?',
     [req.userId],
@@ -432,10 +444,42 @@ app.get('/api/devices', authMiddleware, (req, res) => {
       if (err) {
         return res.status(500).json({ success: false, message: 'Erro ao buscar dispositivos' });
       }
-      res.json({ success: true, data: devices });
+
+      // Calcular status online/offline baseado no last_seen
+      const now = Date.now();
+      const devicesWithStatus = devices.map(device => {
+        const lastSeen = device.last_seen ? new Date(device.last_seen).getTime() : 0;
+        const isOnline = (now - lastSeen) < OFFLINE_TIMEOUT_MS;
+
+        // Atualiza status no banco se mudou para offline
+        if (!isOnline && device.status === 'online') {
+          db.run('UPDATE devices SET status = ? WHERE id = ?', ['offline', device.id]);
+        }
+
+        return {
+          ...device,
+          is_online: isOnline,
+          status: isOnline ? 'online' : 'offline',
+          last_seen_ago: lastSeen ? formatTimeAgo(now - lastSeen) : null
+        };
+      });
+
+      res.json({ success: true, data: devicesWithStatus });
     }
   );
 });
+
+// Formata tempo relativo (ex: "há 5 min", "há 2 horas")
+function formatTimeAgo(ms) {
+  const seconds = Math.floor(ms / 1000);
+  if (seconds < 60) return 'agora';
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `há ${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `há ${hours}h`;
+  const days = Math.floor(hours / 24);
+  return `há ${days}d`;
+}
 
 // Vincular dispositivo
 app.post('/api/devices/link', authMiddleware, (req, res) => {
@@ -1017,23 +1061,30 @@ app.get('/api/devices/:deviceId/commands', (req, res) => {
 app.post('/api/devices/:deviceId/status', (req, res) => {
   const deviceId = req.params.deviceId;
   const { online, food_level, distance_cm, rssi, ip } = req.body;
+  const now = new Date().toISOString();
 
-  console.log(`📊 Status de ${deviceId}: Nível=${food_level}%, Dist=${distance_cm}cm`);
+  console.log(`📊 Status de ${deviceId}: Nível=${food_level}%, Dist=${distance_cm}cm, IP=${ip}`);
 
-  // Atualizar status
+  // Atualizar status em memória
   deviceStatus.set(deviceId, {
     online: online !== false,
     food_level,
     distance_cm,
     rssi,
     ip,
-    lastSeen: new Date().toISOString()
+    lastSeen: now
   });
 
-  // Atualizar no banco
+  // Atualizar no banco (persistente)
   db.run(
-    'UPDATE devices SET status = ? WHERE device_id = ?',
-    ['online', deviceId]
+    `UPDATE devices SET
+      status = 'online',
+      food_level = ?,
+      last_seen = ?,
+      ip_address = ?,
+      rssi = ?
+    WHERE device_id = ?`,
+    [food_level || 0, now, ip || null, rssi || null, deviceId]
   );
 
   // Notificar via WebSocket
@@ -1041,7 +1092,7 @@ app.post('/api/devices/:deviceId/status', (req, res) => {
     if (device) {
       sendToUser(device.user_id, {
         type: 'device_status',
-        data: { device_id: deviceId, food_level, distance_cm, online: true }
+        data: { device_id: deviceId, food_level, distance_cm, online: true, last_seen: now }
       });
     }
   });
