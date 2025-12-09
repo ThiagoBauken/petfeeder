@@ -1,14 +1,14 @@
 // Frontend Configuration
 const CONFIG = {
-  // API Configuration
+  // API Configuration - Usa URL relativa (mesmo servidor serve frontend e backend)
   API_URL: window.location.hostname === 'localhost'
     ? 'http://localhost:3000/api'
-    : 'https://api.petfeeder.com.br/api',
+    : `${window.location.origin}/api`,
 
   // WebSocket Configuration
   WS_URL: window.location.hostname === 'localhost'
     ? 'ws://localhost:8081'
-    : 'wss://ws.petfeeder.com.br',
+    : `wss://${window.location.host.replace('telegram-petfeeder', 'telegram-petfeeder-ws')}`,
 
   // Local Storage Keys
   STORAGE_KEYS: {

@@ -25,8 +25,9 @@ ENV PORT=3000
 # Create data directory
 RUN mkdir -p /app/data /app/logs
 
-# Expose port
+# Expose ports
 EXPOSE 3000
+EXPOSE 8081
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
