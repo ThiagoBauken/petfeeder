@@ -1306,3 +1306,24 @@ tr:hover {
     transform: translateY(-2px);
     box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
 }
+
+/* Multiple Time Inputs */
+.time-input-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 8px;
+}
+
+.time-input-row input[type="time"] {
+    flex: 1;
+    padding: 10px;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    font-size: 16px;
+}
+
+.remove-time-btn {
+    padding: 8px 12px !important;
+    min-width: auto !important;
+}

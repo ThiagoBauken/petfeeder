@@ -788,9 +788,52 @@ async function saveEditPet() {
     }
 }
 
+// Funções para gerenciar múltiplos inputs de horário
+function addTimeInput() {
+    const container = document.getElementById('scheduleTimesList');
+    const row = document.createElement('div');
+    row.className = 'time-input-row';
+    row.innerHTML = `
+        <input type="time" class="schedule-time-input" required>
+        <button type="button" class="btn btn-sm btn-danger remove-time-btn" onclick="removeTimeInput(this)">
+            <i class="fas fa-times"></i>
+        </button>
+    `;
+    container.appendChild(row);
+    updateRemoveButtons();
+}
+
+function removeTimeInput(btn) {
+    btn.closest('.time-input-row').remove();
+    updateRemoveButtons();
+}
+
+function updateRemoveButtons() {
+    const rows = document.querySelectorAll('#scheduleTimesList .time-input-row');
+    rows.forEach((row, index) => {
+        const removeBtn = row.querySelector('.remove-time-btn');
+        if (removeBtn) {
+            // Esconde o botão de remover se for o único
+            removeBtn.style.display = rows.length > 1 ? 'block' : 'none';
+        }
+    });
+}
+
+function resetTimeInputs() {
+    const container = document.getElementById('scheduleTimesList');
+    container.innerHTML = `
+        <div class="time-input-row">
+            <input type="time" class="schedule-time-input" required>
+            <button type="button" class="btn btn-sm btn-danger remove-time-btn" onclick="removeTimeInput(this)" style="display:none;">
+                <i class="fas fa-times"></i>
+            </button>
+        </div>
+    `;
+}
+
 async function addSchedule() {
     const petId = parseInt(document.getElementById('schedulePetSelect').value);
-    const timeValue = document.getElementById('scheduleTime').value;
+    const timeInputs = document.querySelectorAll('.schedule-time-input');
     const doseSize = document.querySelector('input[name="scheduleDose"]:checked')?.value || 'medium';
 
     if (!petId) {
@@ -798,8 +841,16 @@ async function addSchedule() {
         return;
     }
 
-    if (!timeValue) {
-        showToast('Defina um horário', 'error');
+    // Coleta todos os horários válidos
+    const times = [];
+    timeInputs.forEach(input => {
+        if (input.value) {
+            times.push(input.value);
+        }
+    });
+
+    if (times.length === 0) {
+        showToast('Defina pelo menos um horário', 'error');
         return;
     }
 
@@ -809,11 +860,10 @@ async function addSchedule() {
         return;
     }
 
-    const [hour, minute] = timeValue.split(':').map(Number);
     const dose = DOSE_CONFIG[doseSize];
     const deviceId = pet.device_id;
 
-    // Get weekday selection (new IDs)
+    // Get weekday selection
     const weekdays = {
         monday: document.getElementById('day_mon')?.checked ?? true,
         tuesday: document.getElementById('day_tue')?.checked ?? true,
@@ -825,21 +875,41 @@ async function addSchedule() {
     };
 
     try {
-        const result = await api.createSchedule({
-            deviceId,
-            petId,
-            hour,
-            minute,
-            amount: dose.grams,
-            days: weekdays,
-        });
+        let successCount = 0;
+        let errorCount = 0;
 
-        if (result.success) {
-            showToast(`Horário ${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')} criado para ${pet.name}!`, 'success');
+        // Cria um schedule para cada horário
+        for (const timeValue of times) {
+            const [hour, minute] = timeValue.split(':').map(Number);
+
+            const result = await api.createSchedule({
+                deviceId,
+                petId,
+                hour,
+                minute,
+                amount: dose.grams,
+                days: weekdays,
+            });
+
+            if (result.success) {
+                successCount++;
+            } else {
+                errorCount++;
+            }
+        }
+
+        if (successCount > 0) {
+            const msg = successCount === 1
+                ? `Horário criado para ${pet.name}!`
+                : `${successCount} horários criados para ${pet.name}!`;
+            showToast(msg, 'success');
             closeAllModals();
+            resetTimeInputs();
             await loadSchedules();
-        } else {
-            showToast(result.message || 'Erro ao criar horário', 'error');
+        }
+
+        if (errorCount > 0) {
+            showToast(`${errorCount} horário(s) não puderam ser criados`, 'error');
         }
     } catch (error) {
         console.error('Add schedule error:', error);
