@@ -203,6 +203,13 @@ function connectWebSocket() {
         const statusData = data.data || data;
         const deviceId = statusData.device_id || data.deviceId;
         updateDeviceStatus(deviceId, statusData);
+
+        // Mostra toast com o nível atualizado
+        if (statusData.food_level !== undefined) {
+            const device = state.devices.find(d => d.device_id === deviceId);
+            const deviceName = device?.name || deviceId;
+            showToast(`${deviceName}: ${statusData.food_level}% de ração`, 'success');
+        }
     });
 
     ws.on('feeding', (data) => {
@@ -312,9 +319,7 @@ function renderFoodLevels() {
 
 // Refresh food levels by requesting from server
 async function refreshFoodLevels() {
-    showToast('Solicitando leitura do sensor...', 'info');
-
-    // Primeiro, envia comando para cada dispositivo online ler o sensor
+    // Envia comando para cada dispositivo online ler o sensor
     let commandsSent = 0;
     for (const device of state.devices) {
         if (device.status === 'online' || device.is_online) {
@@ -328,31 +333,11 @@ async function refreshFoodLevels() {
     }
 
     if (commandsSent > 0) {
-        showToast(`Comando enviado para ${commandsSent} dispositivo(s). Aguardando resposta...`, 'info');
-
-        // Aguarda 3 segundos para o ESP32 responder
-        await new Promise(resolve => setTimeout(resolve, 3000));
+        // Apenas mostra mensagem - WebSocket vai atualizar automaticamente quando ESP32 responder
+        showToast(`Comando enviado! Aguardando ESP32 responder... (até 5s)`, 'info');
+    } else {
+        showToast('Nenhum dispositivo online', 'warning');
     }
-
-    // Agora busca os dados atualizados do servidor
-    for (const device of state.devices) {
-        try {
-            const result = await api.request('GET', `/devices/${device.device_id}/status`);
-            if (result.success && result.data) {
-                state.deviceStatus[device.device_id] = {
-                    food_level: result.data.food_level,
-                    distance_cm: result.data.distance_cm,
-                    lastSeen: result.data.lastSeen || new Date().toISOString()
-                };
-            }
-        } catch (error) {
-            console.log('Status not available for', device.device_id);
-        }
-    }
-
-    renderFoodLevels();
-    checkLowFoodAlert();
-    showToast('Níveis atualizados!', 'success');
 }
 
 // Check for low food alert
