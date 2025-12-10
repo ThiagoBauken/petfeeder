@@ -1345,7 +1345,7 @@ app.get('/api/devices/:deviceId/schedules', (req, res) => {
 
     // Buscar horários do usuário dono do dispositivo
     db.all(
-      `SELECT s.hour, s.minute, s.amount, s.days, s.active
+      `SELECT s.hour, s.minute, s.amount, s.days, s.active, p.name as pet_name
        FROM schedules s
        JOIN pets p ON s.pet_id = p.id
        WHERE p.user_id = ? AND s.active = 1`,
@@ -1375,7 +1375,8 @@ app.get('/api/devices/:deviceId/schedules', (req, res) => {
             minute: s.minute,
             size: size,
             days: days,
-            active: s.active === 1
+            active: s.active === 1,
+            pet: s.pet_name || 'Pet'
           };
         });
 

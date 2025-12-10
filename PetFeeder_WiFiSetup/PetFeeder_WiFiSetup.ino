@@ -101,6 +101,7 @@ struct Schedule {
   int doseSize;
   bool active;
   uint8_t days;  // Bitmask: bit0=Dom, bit1=Seg, ..., bit6=Sab
+  char petName[32];  // Nome do pet
 };
 Schedule schedules[10];
 int scheduleCount = 0;
@@ -481,10 +482,16 @@ bool fetchSchedules() {
           }
         }
 
-        Serial.printf("  [%d] %02d:%02d dose=%d dias=0x%02X\n",
+        // Nome do pet
+        const char* pet = item["pet"] | "Pet";
+        strncpy(schedules[scheduleCount].petName, pet, 31);
+        schedules[scheduleCount].petName[31] = '\0';
+
+        Serial.printf("  [%d] %02d:%02d %s dose=%d dias=0x%02X\n",
           scheduleCount + 1,
           schedules[scheduleCount].hour,
           schedules[scheduleCount].minute,
+          schedules[scheduleCount].petName,
           schedules[scheduleCount].doseSize,
           schedules[scheduleCount].days);
 
@@ -636,7 +643,7 @@ void checkScheduledFeeding() {
     int currentMins = currentHour * 60 + currentMinute;
 
     if (abs(scheduleMins - currentMins) <= 2) {
-      Serial.printf("[ALIMENTAR] Horario %02d:%02d\n", schedules[i].hour, schedules[i].minute);
+      Serial.printf("[ALIMENTAR] %s - Horario %02d:%02d\n", schedules[i].petName, schedules[i].hour, schedules[i].minute);
       dispense(schedules[i].doseSize);
       sendFeedingLog(schedules[i].doseSize);
       sendStatus();
