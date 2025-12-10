@@ -1142,31 +1142,6 @@ app.get('/api/status', (req, res) => {
 const deviceCommands = new Map();
 const deviceStatus = new Map();
 
-// ESP32 registra dispositivo (versão simplificada)
-app.post('/api/devices/register', (req, res) => {
-  const { device_id, firmware, ip } = req.body;
-
-  if (!device_id) {
-    return res.status(400).json({ success: false, message: 'device_id obrigatório' });
-  }
-
-  console.log(`📱 ESP32 conectado: ${device_id} (IP: ${ip})`);
-
-  // Atualizar status
-  deviceStatus.set(device_id, {
-    online: true,
-    ip: ip,
-    firmware: firmware,
-    lastSeen: new Date().toISOString()
-  });
-
-  res.json({
-    success: true,
-    message: 'Dispositivo registrado',
-    serverTime: new Date().toISOString()
-  });
-});
-
 // ESP32 busca comandos pendentes
 app.get('/api/devices/:deviceId/commands', (req, res) => {
   const deviceId = req.params.deviceId;
@@ -1397,7 +1372,7 @@ app.get('/api/devices/:deviceId/schedules', (req, res) => {
           // Converter amount para size
           let size = 'medium';
           if (s.amount <= 50) size = 'small';
-          else if (s.amount >= 150) size = 'large';
+          else if (s.amount > 100) size = 'large';
 
           // Parse days e converter para array de números
           // ESP32 espera: [0, 1, 2, 3, 4, 5, 6] onde 0=Dom, 1=Seg, etc.
