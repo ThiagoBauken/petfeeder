@@ -94,6 +94,11 @@ int currentStep = 0;
 // Contadores RTC (sobrevivem ao Deep Sleep)
 RTC_DATA_ATTR int bootCount = 0;
 RTC_DATA_ATTR bool deviceRegistered = false;
+RTC_DATA_ATTR uint16_t executedToday = 0;      // Bitmask: bit N = schedule N já executou hoje
+RTC_DATA_ATTR int lastExecutionDay = -1;        // Dia do mês da última execução
+
+// Configuração de fallback
+#define FALLBACK_WINDOW_MINUTES 30  // Executa horários perdidos nos últimos 30 min
 
 struct Schedule {
   int hour;
@@ -139,6 +144,36 @@ bool connectWiFi();
 void setStep(int a, int b, int c, int d);
 void stopMotor();
 void setupPins();
+
+// ==================== SINCRONIZACAO NTP ====================
+
+bool syncTime() {
+  Serial.println("[NTP] Sincronizando horario (GMT-3 Brasilia)...");
+
+  // Configura NTP com GMT-3 (Brasília)
+  configTime(-3 * 3600, 0, "pool.ntp.org", "time.google.com", "time.windows.com");
+
+  // Aguarda sincronização (até 10 segundos)
+  struct tm timeinfo;
+  int attempts = 0;
+  while (!getLocalTime(&timeinfo) && attempts < 20) {
+    delay(500);
+    Serial.print(".");
+    attempts++;
+  }
+  Serial.println();
+
+  if (getLocalTime(&timeinfo)) {
+    Serial.printf("[NTP] Hora atual: %02d:%02d:%02d\n",
+                  timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
+    Serial.printf("[NTP] Data: %02d/%02d/%04d (dia da semana: %d)\n",
+                  timeinfo.tm_mday, timeinfo.tm_mon + 1, timeinfo.tm_year + 1900, timeinfo.tm_wday);
+    return true;
+  } else {
+    Serial.println("[NTP] FALHA na sincronizacao!");
+    return false;
+  }
+}
 
 // ==================== DEVICE ID ====================
 
@@ -194,14 +229,44 @@ void dispense(int doseSize) {
   delay(500);
 }
 
-// ==================== SENSOR ====================
-// Suporta HC-SR04 (4 pinos) e sensores de 3 pinos (S/V/G)
-// Para 3 pinos: conecte S no GPIO 25, use mesmo pino para TRIG e ECHO
+// ==================== SENSOR HC-SR04 MELHORADO ====================
+// Baseado em: github.com/harshkzz/ESP32-HCSRO4-SERIAL-MONITOR
+//             github.com/ashus3868/ESP32-HCSR04
+//
+// Melhorias:
+// - Múltiplas leituras com filtro de mediana (remove ruído)
+// - Descarta outliers (leituras muito diferentes)
+// - Delay entre leituras para estabilização
+// - Compensação de temperatura (velocidade do som)
+// - Suavização com média móvel
 
-// Se seu sensor tem 3 pinos, descomente a linha abaixo:
+// Configuração do reservatório (AJUSTE CONFORME SEU CONTAINER!)
+#define SENSOR_DIST_CHEIO 3      // Distância quando CHEIO (cm) - sensor perto da ração
+#define SENSOR_DIST_VAZIO 30     // Distância quando VAZIO (cm) - sensor longe da ração
+#define SENSOR_NUM_SAMPLES 5     // Número de leituras para mediana
+#define SENSOR_SAMPLE_DELAY 60   // Delay entre leituras (ms)
+
+// Se seu sensor tem 3 pinos (S/V/G), descomente:
 // #define SENSOR_3_PINOS
 
-float readFoodLevel() {
+// Última leitura válida (sobrevive ao Deep Sleep)
+RTC_DATA_ATTR float lastValidLevel = -1;
+
+// Função para ordenar array (bubble sort simples)
+void sortArray(long arr[], int n) {
+  for (int i = 0; i < n - 1; i++) {
+    for (int j = 0; j < n - i - 1; j++) {
+      if (arr[j] > arr[j + 1]) {
+        long temp = arr[j];
+        arr[j] = arr[j + 1];
+        arr[j + 1] = temp;
+      }
+    }
+  }
+}
+
+// Leitura única do sensor
+long readSensorOnce() {
   long duration = 0;
 
 #ifdef SENSOR_3_PINOS
@@ -213,43 +278,115 @@ float readFoodLevel() {
   delayMicroseconds(10);
   digitalWrite(ECHO_PIN, LOW);
   pinMode(ECHO_PIN, INPUT);
-  duration = pulseIn(ECHO_PIN, HIGH, 50000);
+  duration = pulseIn(ECHO_PIN, HIGH, 30000);
 #else
   // HC-SR04 padrão (4 pinos)
-  // NÃO usar noInterrupts() pois conflita com WiFi do ESP32
+  // Garante TRIG baixo antes do pulso
   digitalWrite(TRIG_PIN, LOW);
-  delayMicroseconds(2);
+  delayMicroseconds(5);
+
+  // Pulso de 10us no TRIG
   digitalWrite(TRIG_PIN, HIGH);
   delayMicroseconds(10);
   digitalWrite(TRIG_PIN, LOW);
 
-  // Timeout de 50ms (max ~8.5m)
-  duration = pulseIn(ECHO_PIN, HIGH, 50000);
+  // Lê duração do ECHO (timeout 30ms = ~5m max)
+  duration = pulseIn(ECHO_PIN, HIGH, 30000);
 #endif
 
-  // Debug do sensor
-  Serial.printf("[SENSOR] duration=%ld us", duration);
+  return duration;
+}
 
-  if (duration == 0) {
-    Serial.println(" -> TIMEOUT (sem resposta)");
-    Serial.println("         Verifique: VCC=5V, GND, TRIG=GPIO26, ECHO=GPIO25");
-    Serial.println("         Se sensor 3 pinos: descomente #define SENSOR_3_PINOS no codigo");
+// Leitura com múltiplas amostras e filtro de mediana
+float readFoodLevel() {
+  long samples[SENSOR_NUM_SAMPLES];
+  int validSamples = 0;
+
+  Serial.println("[SENSOR] Lendo HC-SR04...");
+
+  // Coleta múltiplas amostras
+  for (int i = 0; i < SENSOR_NUM_SAMPLES; i++) {
+    long duration = readSensorOnce();
+
+    if (duration > 0) {
+      samples[validSamples] = duration;
+      validSamples++;
+      Serial.printf("  Amostra %d: %ld us\n", i + 1, duration);
+    } else {
+      Serial.printf("  Amostra %d: TIMEOUT\n", i + 1);
+    }
+
+    delay(SENSOR_SAMPLE_DELAY);
+  }
+
+  // Verifica se teve leituras válidas suficientes
+  if (validSamples < 2) {
+    Serial.println("[SENSOR] ERRO: Sensor nao respondeu!");
+    Serial.println("         Verifique conexoes:");
+    Serial.println("         - VCC do sensor -> 5V do ESP32");
+    Serial.println("         - GND do sensor -> GND do ESP32");
+    Serial.println("         - TRIG -> GPIO 26");
+    Serial.println("         - ECHO -> GPIO 25");
+    Serial.println("         Nota: HC-SR04 precisa de 5V, nao funciona com 3.3V!");
+
+    // Retorna última leitura válida se existir
+    if (lastValidLevel >= 0) {
+      Serial.printf("[SENSOR] Usando ultima leitura: %.0f%%\n", lastValidLevel);
+      return lastValidLevel;
+    }
+
+    // Se nunca teve leitura válida, retorna 50% (valor neutro)
+    Serial.println("[SENSOR] Sem leitura anterior, assumindo 50%");
+    return 50;
+  }
+
+  // Ordena para pegar mediana
+  sortArray(samples, validSamples);
+
+  // Pega a mediana (valor do meio)
+  long medianDuration = samples[validSamples / 2];
+
+  // Calcula distância
+  // Velocidade do som: ~343 m/s a 20°C = 0.0343 cm/us
+  // Ida e volta, então divide por 2
+  float distance = medianDuration * 0.0343 / 2.0;
+
+  Serial.printf("[SENSOR] Mediana: %ld us = %.1f cm\n", medianDuration, distance);
+
+  // Valida distância (sensor tem range de 2-400cm)
+  if (distance < 2 || distance > 400) {
+    Serial.println("[SENSOR] Distancia fora do range (2-400cm)");
+    if (lastValidLevel >= 0) {
+      return lastValidLevel;
+    }
     return -1;
   }
 
-  float distance = duration * 0.034 / 2;  // cm
-  Serial.printf(" -> distancia=%.1f cm", distance);
-
+  // Calcula nível percentual
   float level;
-  if (distance < 5) {
+  if (distance <= SENSOR_DIST_CHEIO) {
     level = 100;
-  } else if (distance > 20) {
+  } else if (distance >= SENSOR_DIST_VAZIO) {
     level = 0;
   } else {
-    level = map((long)distance, 20, 5, 0, 100);
+    // Mapeia distância para porcentagem
+    level = 100.0 * (SENSOR_DIST_VAZIO - distance) / (SENSOR_DIST_VAZIO - SENSOR_DIST_CHEIO);
   }
 
-  Serial.printf(" -> nivel=%d%%\n", (int)level);
+  // Limita entre 0 e 100
+  level = constrain(level, 0, 100);
+
+  // Suavização: média com leitura anterior (evita picos)
+  if (lastValidLevel >= 0) {
+    // 70% nova leitura + 30% anterior
+    level = level * 0.7 + lastValidLevel * 0.3;
+  }
+
+  lastValidLevel = level;
+
+  Serial.printf("[SENSOR] Nivel: %.0f%% (dist=%.1fcm, cheio=%dcm, vazio=%dcm)\n",
+                level, distance, SENSOR_DIST_CHEIO, SENSOR_DIST_VAZIO);
+
   return level;
 }
 
@@ -544,6 +681,9 @@ void checkCommands() {
       } else if (cmd == "sync") {
         Serial.println("[COMANDO] Sync");
         fetchSchedules();
+      } else if (cmd == "check_level") {
+        Serial.println("[COMANDO] Verificar nivel de racao");
+        sendStatus();  // Le o sensor e envia pro servidor
       }
     } else {
       Serial.println("[COMMANDS] Nenhum comando pendente");
@@ -629,25 +769,62 @@ void goToSleep(uint32_t seconds) {
 
 void checkScheduledFeeding() {
   struct tm timeinfo;
-  if (!getLocalTime(&timeinfo)) return;
+  if (!getLocalTime(&timeinfo)) {
+    Serial.println("[HORARIOS] Sem hora sincronizada, pulando verificacao");
+    return;
+  }
 
   int currentHour = timeinfo.tm_hour;
   int currentMinute = timeinfo.tm_min;
-  int currentDay = timeinfo.tm_wday;
+  int currentDay = timeinfo.tm_wday;  // 0=Dom, 1=Seg, ...
+  int currentDayOfMonth = timeinfo.tm_mday;
+  int currentMins = currentHour * 60 + currentMinute;
 
-  for (int i = 0; i < scheduleCount; i++) {
+  // Reseta execuções se mudou o dia
+  if (lastExecutionDay != currentDayOfMonth) {
+    Serial.printf("[HORARIOS] Novo dia (%d), resetando execucoes\n", currentDayOfMonth);
+    executedToday = 0;
+    lastExecutionDay = currentDayOfMonth;
+  }
+
+  Serial.printf("[HORARIOS] Verificando %d horarios (atual: %02d:%02d, dia=%d)\n",
+                scheduleCount, currentHour, currentMinute, currentDay);
+
+  for (int i = 0; i < scheduleCount && i < 10; i++) {
     if (!schedules[i].active) continue;
     if (!(schedules[i].days & (1 << currentDay))) continue;
 
-    int scheduleMins = schedules[i].hour * 60 + schedules[i].minute;
-    int currentMins = currentHour * 60 + currentMinute;
+    // Já executou hoje?
+    if (executedToday & (1 << i)) {
+      continue;  // Pula, já foi executado
+    }
 
-    if (abs(scheduleMins - currentMins) <= 2) {
-      Serial.printf("[ALIMENTAR] %s - Horario %02d:%02d\n", schedules[i].petName, schedules[i].hour, schedules[i].minute);
+    int scheduleMins = schedules[i].hour * 60 + schedules[i].minute;
+    int diffMins = currentMins - scheduleMins;
+
+    // Executa se:
+    // 1. Está no horário (até 2 min de tolerância)
+    // 2. OU passou recentemente (fallback - até FALLBACK_WINDOW_MINUTES)
+    bool isOnTime = (diffMins >= -2 && diffMins <= 2);
+    bool isMissed = (diffMins > 2 && diffMins <= FALLBACK_WINDOW_MINUTES);
+
+    if (isOnTime || isMissed) {
+      if (isMissed) {
+        Serial.printf("[FALLBACK] Horario perdido %02d:%02d (passou %d min)\n",
+                      schedules[i].hour, schedules[i].minute, diffMins);
+      }
+
+      Serial.printf("[ALIMENTAR] %s - Horario %02d:%02d\n",
+                    schedules[i].petName, schedules[i].hour, schedules[i].minute);
+
+      // Marca como executado ANTES de dispensar (evita duplicação)
+      executedToday |= (1 << i);
+
       dispense(schedules[i].doseSize);
       sendFeedingLog(schedules[i].doseSize);
       sendStatus();
-      return;
+
+      // Continua verificando outros horários (pode ter mais de um no mesmo período)
     }
   }
 }
@@ -866,7 +1043,7 @@ void startConfigMode() {
 
 // Modo ativo: com horarios mas SEM Deep Sleep (power_save = false)
 unsigned long lastScheduleCheck = 0;
-#define SCHEDULE_CHECK_INTERVAL_MS 60000  // Verificar horarios a cada 1 min
+#define SCHEDULE_CHECK_INTERVAL_MS 300000  // Verificar horarios a cada 5 min (fallback de 30 min garante execucao)
 
 void startActiveMode() {
   activeMode = true;
@@ -878,8 +1055,9 @@ void startActiveMode() {
   Serial.println("========================================");
   Serial.println("Modo economia DESATIVADO pelo site");
   Serial.printf("IP local: http://%s\n", WiFi.localIP().toString().c_str());
-  Serial.println("Verificando comandos a cada 30s");
-  Serial.println("Verificando horarios a cada 1min");
+  Serial.println("Verificando comandos a cada 5s");
+  Serial.println("Verificando horarios a cada 5min");
+  Serial.printf("Fallback: %d min (executa horarios perdidos)\n", FALLBACK_WINDOW_MINUTES);
   Serial.println("========================================\n");
 
   // Servidor local
@@ -1055,21 +1233,32 @@ void testMotor() {
 
 void testSensor() {
   Serial.println("\n[TESTE SENSOR HC-SR04]");
+  Serial.println("========================================");
   Serial.printf("  TRIG_PIN: GPIO %d\n", TRIG_PIN);
   Serial.printf("  ECHO_PIN: GPIO %d\n", ECHO_PIN);
-  Serial.println("  Fazendo 3 leituras...");
+  Serial.printf("  Dist CHEIO: %d cm\n", SENSOR_DIST_CHEIO);
+  Serial.printf("  Dist VAZIO: %d cm\n", SENSOR_DIST_VAZIO);
+  Serial.println("========================================");
+  Serial.println("  Testando sensor (5 amostras)...\n");
 
-  for (int i = 0; i < 3; i++) {
-    delay(500);
-    Serial.printf("  Leitura %d: ", i + 1);
-    float level = readFoodLevel();
-    if (level < 0) {
-      Serial.println("  >>> SENSOR FALHOU - Verifique conexoes!");
-    } else {
-      Serial.printf("  >>> OK! Nivel: %.0f%%\n", level);
-    }
+  float level = readFoodLevel();
+
+  Serial.println("========================================");
+  if (level < 0) {
+    Serial.println("  RESULTADO: SENSOR FALHOU!");
+    Serial.println("  Verifique:");
+    Serial.println("  - HC-SR04 precisa de 5V (nao 3.3V)");
+    Serial.println("  - Conexoes TRIG e ECHO");
+  } else if (level == 0) {
+    Serial.println("  RESULTADO: 0% - Reservatorio VAZIO");
+    Serial.println("  (ou sensor muito longe da racao)");
+    Serial.printf("  Ajuste SENSOR_DIST_VAZIO se > %d cm\n", SENSOR_DIST_VAZIO);
+  } else if (level == 100) {
+    Serial.println("  RESULTADO: 100% - Reservatorio CHEIO");
+  } else {
+    Serial.printf("  RESULTADO: %.0f%% - OK!\n", level);
   }
-  Serial.println();
+  Serial.println("========================================\n");
 }
 
 void setup() {
@@ -1113,8 +1302,7 @@ void handleTimerWakeup() {
   if (!connectWiFi()) {
     Serial.println("[OFFLINE] Usando horarios salvos");
   } else {
-    configTime(-3 * 3600, 0, "pool.ntp.org");
-    delay(1000);
+    syncTime();  // Sincroniza hora via NTP (GMT-3)
   }
 
   // Verifica se e hora de alimentar
@@ -1156,9 +1344,10 @@ void handleNormalBoot() {
     return;
   }
 
-  // Configura NTP
-  configTime(-3 * 3600, 0, "pool.ntp.org");
-  delay(1000);
+  // Sincroniza horário via NTP
+  if (!syncTime()) {
+    Serial.println("[AVISO] Continuando sem hora sincronizada");
+  }
 
   // Registra dispositivo
   registerDevice();

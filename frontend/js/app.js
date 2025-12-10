@@ -295,12 +295,31 @@ function renderFoodLevels() {
 
 // Refresh food levels by requesting from server
 async function refreshFoodLevels() {
-    showToast('Verificando nível de ração...', 'info');
+    showToast('Solicitando leitura do sensor...', 'info');
 
-    // For each device, request the status from server
+    // Primeiro, envia comando para cada dispositivo online ler o sensor
+    let commandsSent = 0;
+    for (const device of state.devices) {
+        if (device.status === 'online' || device.is_online) {
+            try {
+                await api.request('POST', `/devices/${device.device_id}/check-level`);
+                commandsSent++;
+            } catch (error) {
+                console.log('Erro ao enviar comando para', device.device_id);
+            }
+        }
+    }
+
+    if (commandsSent > 0) {
+        showToast(`Comando enviado para ${commandsSent} dispositivo(s). Aguardando resposta...`, 'info');
+
+        // Aguarda 3 segundos para o ESP32 responder
+        await new Promise(resolve => setTimeout(resolve, 3000));
+    }
+
+    // Agora busca os dados atualizados do servidor
     for (const device of state.devices) {
         try {
-            // The ESP32 sends status every 5 min, but we can fetch the cached status from server
             const result = await api.request('GET', `/devices/${device.device_id}/status`);
             if (result.success && result.data) {
                 state.deviceStatus[device.device_id] = {

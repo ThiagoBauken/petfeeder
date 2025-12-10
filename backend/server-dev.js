@@ -79,8 +79,14 @@ db.serialize(() => {
     // Ignora erro se coluna já existe
   });
 
-  // Garantir que dispositivos existentes tenham power_save = 0 (não NULL)
+  // Adicionar colunas de configuração do sensor
+  db.run(`ALTER TABLE devices ADD COLUMN sensor_dist_full INTEGER DEFAULT 3`, () => {});
+  db.run(`ALTER TABLE devices ADD COLUMN sensor_dist_empty INTEGER DEFAULT 30`, () => {});
+
+  // Garantir que dispositivos existentes tenham valores padrão
   db.run(`UPDATE devices SET power_save = 0 WHERE power_save IS NULL`);
+  db.run(`UPDATE devices SET sensor_dist_full = 3 WHERE sensor_dist_full IS NULL`);
+  db.run(`UPDATE devices SET sensor_dist_empty = 30 WHERE sensor_dist_empty IS NULL`);
 
   // Pets
   db.run(`
@@ -1331,6 +1337,37 @@ app.get('/api/devices/:deviceId/status', authMiddleware, (req, res) => {
   res.json({ success: true, data: status });
 });
 
+// Solicitar leitura de nível do sensor (envia comando para ESP32)
+app.post('/api/devices/:deviceId/check-level', authMiddleware, (req, res) => {
+  const deviceId = req.params.deviceId;
+
+  // Verificar se dispositivo pertence ao usuário
+  db.get(
+    'SELECT device_id FROM devices WHERE device_id = ? AND user_id = ?',
+    [deviceId, req.userId],
+    (err, device) => {
+      if (err || !device) {
+        return res.status(404).json({ success: false, message: 'Dispositivo não encontrado' });
+      }
+
+      // Adicionar comando à fila para o ESP32
+      const commands = deviceCommands.get(deviceId) || [];
+      commands.push({
+        command: 'check_level'
+      });
+      deviceCommands.set(deviceId, commands);
+
+      console.log(`📊 Comando check_level enviado para ${deviceId}`);
+
+      res.json({
+        success: true,
+        message: 'Comando enviado. Aguarde o ESP32 responder.',
+        hint: 'O ESP32 deve enviar o status em alguns segundos se estiver online.'
+      });
+    }
+  );
+});
+
 // ESP32 busca horários agendados (ROTA PÚBLICA - sem auth)
 app.get('/api/devices/:deviceId/schedules', (req, res) => {
   const deviceId = req.params.deviceId;
@@ -1362,19 +1399,37 @@ app.get('/api/devices/:deviceId/schedules', (req, res) => {
           if (s.amount <= 50) size = 'small';
           else if (s.amount >= 150) size = 'large';
 
-          // Parse days
-          let days = [];
+          // Parse days e converter para array de números
+          // ESP32 espera: [0, 1, 2, 3, 4, 5, 6] onde 0=Dom, 1=Seg, etc.
+          let daysArray = [];
           try {
-            days = JSON.parse(s.days);
+            const daysData = JSON.parse(s.days);
+            if (Array.isArray(daysData)) {
+              // Já é array (formato antigo)
+              daysArray = daysData;
+            } else {
+              // Formato objeto {monday: true, ...}
+              const dayNames = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+              dayNames.forEach((name, index) => {
+                if (daysData[name]) {
+                  daysArray.push(index);
+                }
+              });
+            }
           } catch (e) {
-            days = [0, 1, 2, 3, 4, 5, 6]; // Todos os dias
+            daysArray = [0, 1, 2, 3, 4, 5, 6]; // Todos os dias
+          }
+
+          // Se array vazio, usar todos os dias
+          if (daysArray.length === 0) {
+            daysArray = [0, 1, 2, 3, 4, 5, 6];
           }
 
           return {
             hour: s.hour,
             minute: s.minute,
             size: size,
-            days: days,
+            days: daysArray,
             active: s.active === 1,
             pet: s.pet_name || 'Pet'
           };
@@ -1433,11 +1488,14 @@ server.listen(PORT, () => {
   console.log(`║ HTTP: http://localhost:${PORT}          ║`);
   console.log(`║ WebSocket: ws://localhost:${WS_PORT}         ║`);
   console.log('║ Database: SQLite (memória)             ║');
-  console.log('║ MQTT: Simulado (sem Mosquitto)         ║');
+  console.log('║ ESP32 executa horários internamente    ║');
   console.log('╚════════════════════════════════════════╝\n');
   console.log('✅ Servidor pronto para receber requisições!\n');
-  console.log('⚠️  AVISO: Esta versão é apenas para desenvolvimento');
-  console.log('    Para produção, use docker-compose.yml\n');
+  console.log('📋 Fluxo de horários:');
+  console.log('   1. Usuário cria horário no site');
+  console.log('   2. ESP32 sincroniza horários (GET /api/devices/:id/schedules)');
+  console.log('   3. ESP32 salva na memória flash');
+  console.log('   4. ESP32 verifica e executa internamente\n');
 });
 
 // Graceful shutdown
