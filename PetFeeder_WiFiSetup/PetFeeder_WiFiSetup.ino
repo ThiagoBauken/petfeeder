@@ -110,6 +110,19 @@ RTC_DATA_ATTR bool timeWasSynced = false;      // Se já sincronizou pelo menos 
 // Configuração de fallback (modo ativo verifica a cada 1 min, então 3 min é suficiente)
 #define FALLBACK_WINDOW_MINUTES 3  // Executa horários perdidos nos últimos 3 min
 
+// ==================== FILA DE ALIMENTACOES OFFLINE ====================
+// Guarda alimentações feitas offline para enviar quando reconectar
+#define MAX_PENDING_FEEDS 10
+
+struct PendingFeed {
+  time_t timestamp;      // Quando foi executada (epoch)
+  uint8_t doseSize;      // 1=small, 2=medium, 3=large
+  char petName[32];      // Nome do pet
+  bool valid;            // Se este slot está em uso
+};
+PendingFeed pendingFeeds[MAX_PENDING_FEEDS];
+int pendingFeedCount = 0;
+
 struct Schedule {
   int hour;
   int minute;
@@ -152,6 +165,12 @@ void saveConfig(String ssid, String password, String email);
 void saveSchedulesToFlash();
 void clearConfig();
 bool connectWiFi();
+void savePendingFeedsToFlash();
+void loadPendingFeedsFromFlash();
+void addPendingFeed(int doseSize, const char* petName);
+void sendPendingFeeds();
+void saveTimeToFlash();
+void loadTimeFromFlash();
 void setStep(int a, int b, int c, int d);
 void stopMotor();
 void setupPins();
@@ -180,9 +199,10 @@ bool syncTime() {
     Serial.printf("[NTP] Data: %02d/%02d/%04d (dia da semana: %d)\n",
                   timeinfo.tm_mday, timeinfo.tm_mon + 1, timeinfo.tm_year + 1900, timeinfo.tm_wday);
 
-    // Salva tempo sincronizado para uso offline
+    // Salva tempo sincronizado para uso offline (RTC + Flash)
     time(&lastSyncedTime);
     timeWasSynced = true;
+    saveTimeToFlash();  // Salva na flash para sobreviver power cycle
     Serial.printf("[NTP] Tempo salvo para modo offline: %ld\n", lastSyncedTime);
 
     return true;
@@ -426,12 +446,17 @@ void loadConfig() {
     schedules[i].petName[31] = '\0';
   }
 
+  // Carrega tempo salvo e alimentacoes pendentes
+  loadTimeFromFlash();
+  loadPendingFeedsFromFlash();
+
   Serial.println("\n[CONFIG] Carregado:");
   Serial.printf("  SSID: %s\n", savedSSID.length() > 0 ? savedSSID.c_str() : "(vazio)");
   Serial.printf("  Email: %s\n", userEmail.length() > 0 ? userEmail.c_str() : "(vazio)");
   Serial.printf("  Device: %s\n", deviceId.c_str());
   Serial.printf("  Horarios: %d\n", scheduleCount);
   Serial.printf("  Economia: %s\n", powerSaveEnabled ? "ON (Deep Sleep)" : "OFF (Polling)");
+  Serial.printf("  Pendentes: %d alimentacoes offline\n", pendingFeedCount);
 }
 
 void saveConfig(String ssid, String password, String email) {
@@ -469,7 +494,182 @@ void clearConfig() {
   userEmail = "";
   scheduleCount = 0;
   deviceRegistered = false;
+  pendingFeedCount = 0;
   Serial.println("[CONFIG] Limpo!");
+}
+
+// ==================== TEMPO PERSISTENTE (FLASH) ====================
+
+void saveTimeToFlash() {
+  time_t now;
+  time(&now);
+  if (now > 1700000000) {  // Sanity check: depois de 2023
+    preferences.putULong64("lastTime", (uint64_t)now);
+    preferences.putBool("timeSynced", true);
+    Serial.printf("[TIME] Salvo na flash: %ld\n", now);
+  }
+}
+
+void loadTimeFromFlash() {
+  if (preferences.getBool("timeSynced", false)) {
+    time_t savedTime = (time_t)preferences.getULong64("lastTime", 0);
+    if (savedTime > 1700000000) {  // Sanity check
+      // Configura o RTC interno com a hora salva
+      struct timeval tv;
+      tv.tv_sec = savedTime;
+      tv.tv_usec = 0;
+      settimeofday(&tv, NULL);
+
+      lastSyncedTime = savedTime;
+      timeWasSynced = true;
+
+      Serial.printf("[TIME] Carregado da flash: %ld\n", savedTime);
+
+      struct tm timeinfo;
+      if (getLocalTime(&timeinfo)) {
+        Serial.printf("[TIME] Hora restaurada: %02d:%02d:%02d\n",
+                      timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
+      }
+    }
+  }
+}
+
+// ==================== FILA DE ALIMENTACOES OFFLINE ====================
+
+void savePendingFeedsToFlash() {
+  preferences.putInt("pendingCount", pendingFeedCount);
+  for (int i = 0; i < pendingFeedCount && i < MAX_PENDING_FEEDS; i++) {
+    String key = "pf" + String(i);
+    preferences.putULong64((key + "t").c_str(), (uint64_t)pendingFeeds[i].timestamp);
+    preferences.putUChar((key + "d").c_str(), pendingFeeds[i].doseSize);
+    preferences.putString((key + "p").c_str(), pendingFeeds[i].petName);
+  }
+  Serial.printf("[OFFLINE] %d alimentacoes pendentes salvas na flash\n", pendingFeedCount);
+}
+
+void loadPendingFeedsFromFlash() {
+  pendingFeedCount = preferences.getInt("pendingCount", 0);
+  if (pendingFeedCount > MAX_PENDING_FEEDS) pendingFeedCount = MAX_PENDING_FEEDS;
+
+  for (int i = 0; i < pendingFeedCount; i++) {
+    String key = "pf" + String(i);
+    pendingFeeds[i].timestamp = (time_t)preferences.getULong64((key + "t").c_str(), 0);
+    pendingFeeds[i].doseSize = preferences.getUChar((key + "d").c_str(), 2);
+    String pet = preferences.getString((key + "p").c_str(), "Pet");
+    strncpy(pendingFeeds[i].petName, pet.c_str(), 31);
+    pendingFeeds[i].petName[31] = '\0';
+    pendingFeeds[i].valid = true;
+  }
+
+  if (pendingFeedCount > 0) {
+    Serial.printf("[OFFLINE] %d alimentacoes pendentes carregadas da flash\n", pendingFeedCount);
+  }
+}
+
+void addPendingFeed(int doseSize, const char* petName) {
+  if (pendingFeedCount >= MAX_PENDING_FEEDS) {
+    Serial.println("[OFFLINE] Fila cheia! Removendo mais antiga...");
+    // Shift array para remover a mais antiga
+    for (int i = 0; i < MAX_PENDING_FEEDS - 1; i++) {
+      pendingFeeds[i] = pendingFeeds[i + 1];
+    }
+    pendingFeedCount = MAX_PENDING_FEEDS - 1;
+  }
+
+  // Pega timestamp atual (estimado ou real)
+  time_t now;
+  struct tm timeinfo;
+  if (getLocalTime(&timeinfo)) {
+    time(&now);
+  } else if (estimateOfflineTime(&timeinfo)) {
+    now = mktime(&timeinfo);
+  } else {
+    now = lastSyncedTime + lastSleepDuration;  // Melhor estimativa
+  }
+
+  pendingFeeds[pendingFeedCount].timestamp = now;
+  pendingFeeds[pendingFeedCount].doseSize = doseSize;
+  if (petName != nullptr) {
+    strncpy(pendingFeeds[pendingFeedCount].petName, petName, 31);
+  } else {
+    strcpy(pendingFeeds[pendingFeedCount].petName, "Pet");
+  }
+  pendingFeeds[pendingFeedCount].petName[31] = '\0';
+  pendingFeeds[pendingFeedCount].valid = true;
+  pendingFeedCount++;
+
+  // Salva imediatamente na flash
+  savePendingFeedsToFlash();
+
+  Serial.printf("[OFFLINE] Alimentacao adicionada a fila (%d pendentes)\n", pendingFeedCount);
+}
+
+void sendPendingFeeds() {
+  if (!wifiConnected || pendingFeedCount == 0) return;
+
+  Serial.printf("[OFFLINE] Enviando %d alimentacoes pendentes...\n", pendingFeedCount);
+
+  int sent = 0;
+  for (int i = 0; i < pendingFeedCount; i++) {
+    if (!pendingFeeds[i].valid) continue;
+
+    HTTPClient http;
+    String url = serverUrl + "/api/feed/log";
+    http.begin(httpsClient, url);
+    http.addHeader("Content-Type", "application/json");
+    http.setTimeout(10000);
+
+    String size = pendingFeeds[i].doseSize == 1 ? "small" :
+                  pendingFeeds[i].doseSize == 3 ? "large" : "medium";
+
+    // Formata timestamp para ISO string
+    struct tm* tmInfo = localtime(&pendingFeeds[i].timestamp);
+    char timeStr[30];
+    strftime(timeStr, sizeof(timeStr), "%Y-%m-%dT%H:%M:%S", tmInfo);
+
+    StaticJsonDocument<512> doc;
+    doc["device_id"] = deviceId;
+    doc["size"] = size;
+    doc["trigger"] = "scheduled";
+    doc["offline"] = true;  // Marca como alimentacao offline
+    doc["executed_at"] = timeStr;  // Quando foi executada
+    if (strlen(pendingFeeds[i].petName) > 0) {
+      doc["pet_name"] = pendingFeeds[i].petName;
+    }
+
+    String json;
+    serializeJson(doc, json);
+
+    Serial.printf("[OFFLINE] Enviando: %s\n", json.c_str());
+
+    int httpCode = http.POST(json);
+    if (httpCode == 200 || httpCode == 201) {
+      Serial.printf("[OFFLINE] Alimentacao %d enviada!\n", i + 1);
+      pendingFeeds[i].valid = false;
+      sent++;
+    } else {
+      Serial.printf("[OFFLINE] ERRO ao enviar %d: HTTP %d\n", i + 1, httpCode);
+    }
+
+    http.end();
+    delay(500);  // Pequeno delay entre requisicoes
+  }
+
+  // Remove os enviados
+  if (sent > 0) {
+    int newCount = 0;
+    for (int i = 0; i < pendingFeedCount; i++) {
+      if (pendingFeeds[i].valid) {
+        if (newCount != i) {
+          pendingFeeds[newCount] = pendingFeeds[i];
+        }
+        newCount++;
+      }
+    }
+    pendingFeedCount = newCount;
+    savePendingFeedsToFlash();
+    Serial.printf("[OFFLINE] %d enviadas, %d restantes\n", sent, pendingFeedCount);
+  }
 }
 
 // ==================== COMUNICACAO COM SERVIDOR ====================
@@ -555,7 +755,12 @@ void sendStatus() {
 }
 
 void sendFeedingLog(int doseSize, const char* petName) {
-  if (!wifiConnected || deviceId.length() == 0) return;
+  // Se offline, adiciona a fila para enviar depois
+  if (!wifiConnected || deviceId.length() == 0) {
+    Serial.println("[LOG] Offline - adicionando a fila de pendentes");
+    addPendingFeed(doseSize, petName);
+    return;
+  }
 
   HTTPClient http;
   String url = serverUrl + "/api/feed/log";
@@ -582,7 +787,9 @@ void sendFeedingLog(int doseSize, const char* petName) {
   if (httpCode == 200) {
     Serial.println("[LOG] Alimentacao registrada no servidor");
   } else {
-    Serial.printf("[LOG] ERRO ao registrar: HTTP %d\n", httpCode);
+    Serial.printf("[LOG] ERRO ao registrar: HTTP %d - adicionando a fila\n", httpCode);
+    // Se falhou, adiciona a fila para tentar novamente depois
+    addPendingFeed(doseSize, petName);
   }
   http.end();
 }
@@ -1471,6 +1678,9 @@ void handleTimerWakeup() {
 
   // Sync se necessario
   if (wifiConnected) {
+    // Envia alimentacoes pendentes (feitas offline)
+    sendPendingFeeds();
+
     static unsigned long lastSync = 0;
     if (bootCount % 12 == 0) {  // Sync a cada ~12 wakeups
       fetchSchedules();
@@ -1512,6 +1722,9 @@ void handleNormalBoot() {
 
   // Registra dispositivo
   registerDevice();
+
+  // Envia alimentacoes pendentes (feitas offline)
+  sendPendingFeeds();
 
   // Busca horarios
   fetchSchedules();

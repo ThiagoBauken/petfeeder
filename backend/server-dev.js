@@ -1314,7 +1314,10 @@ app.post('/api/devices/:deviceId/status', (req, res) => {
 
 // ESP32 registra alimentação
 app.post('/api/feed/log', (req, res) => {
-  const { device_id, size, steps, food_level_after, trigger, pet_name } = req.body;
+  const { device_id, size, steps, food_level_after, trigger, pet_name, offline, executed_at } = req.body;
+
+  const isOffline = offline === true;
+  const timestamp = executed_at || new Date().toISOString();
 
   console.log(`🍽️ Alimentação registrada: ${device_id} - ${size} - pet: ${pet_name || 'N/A'}`);
 
@@ -1352,10 +1355,11 @@ app.post('/api/feed/log', (req, res) => {
 
       console.log(`✅ Pet encontrado: ${pet.name} (id: ${pet.id})`);
 
-      // Registrar no histórico
+      // Registrar no histórico (usa timestamp offline se fornecido)
+      const triggerType = isOffline ? 'scheduled_offline' : (trigger || 'remote');
       db.run(
-        'INSERT INTO feeding_history (pet_id, device_id, amount, trigger_type) VALUES (?, ?, ?, ?)',
-        [pet.id, device.id, amount, trigger || 'remote'],
+        'INSERT INTO feeding_history (pet_id, device_id, amount, trigger_type, created_at) VALUES (?, ?, ?, ?, ?)',
+        [pet.id, device.id, amount, triggerType, timestamp],
         function(err) {
           if (err) {
             console.log(`❌ Erro ao salvar histórico: ${err.message}`);
