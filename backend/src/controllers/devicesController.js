@@ -489,6 +489,277 @@ class DevicesController {
       next(error);
     }
   }
+
+  // ==================== ROTAS ESP32 (PUBLICAS) ====================
+
+  // Auto-registro do ESP32 usando email do usuario
+  async autoRegisterDevice(req, res, next) {
+    try {
+      const { deviceId, email, name } = req.body;
+
+      logger.info('Auto-register attempt', { deviceId, email });
+
+      // Buscar usuario pelo email
+      const userResult = await query(
+        'SELECT id, email, name FROM users WHERE LOWER(email) = LOWER($1) AND deleted_at IS NULL',
+        [email]
+      );
+
+      if (userResult.rows.length === 0) {
+        return res.status(404).json({
+          success: false,
+          message: 'Email não encontrado. Crie uma conta primeiro no site.',
+        });
+      }
+
+      const user = userResult.rows[0];
+      const deviceName = name || `PetFeeder ${deviceId.slice(-6)}`;
+
+      // Verificar se dispositivo ja existe
+      const existingDevice = await query(
+        'SELECT id FROM devices WHERE device_id = $1',
+        [deviceId]
+      );
+
+      if (existingDevice.rows.length > 0) {
+        // Atualizar dispositivo existente
+        await query(
+          `UPDATE devices SET user_id = $1, name = $2, status = 'online', last_seen_at = NOW(), updated_at = NOW()
+           WHERE device_id = $3`,
+          [user.id, deviceName, deviceId]
+        );
+        logger.info('Device re-linked', { deviceId, userId: user.id });
+      } else {
+        // Criar novo dispositivo
+        await query(
+          `INSERT INTO devices (device_id, user_id, name, status, activated_at)
+           VALUES ($1, $2, $3, 'online', NOW())`,
+          [deviceId, user.id, deviceName]
+        );
+        logger.info('Device created', { deviceId, userId: user.id });
+      }
+
+      // Salvar status no Redis
+      await redis.set(`device:${deviceId}:status`, {
+        online: true,
+        timestamp: new Date().toISOString(),
+      }, 600);
+
+      res.json({
+        success: true,
+        message: 'Dispositivo vinculado com sucesso',
+      });
+    } catch (error) {
+      logger.error('Auto-register error', error);
+      next(error);
+    }
+  }
+
+  // ESP32 envia status do dispositivo
+  async updateDeviceStatus(req, res, next) {
+    try {
+      const { deviceId } = req.params;
+      const { food_level, rssi, ip, mode, power_save_enabled, schedules_count } = req.body;
+
+      logger.info('Device status update', { deviceId, food_level, mode });
+
+      // Atualizar no banco
+      await query(
+        `UPDATE devices SET
+           status = 'online',
+           food_level = COALESCE($1, food_level),
+           ip_address = COALESCE($2, ip_address),
+           last_seen_at = NOW(),
+           updated_at = NOW()
+         WHERE device_id = $3`,
+        [food_level, ip, deviceId]
+      );
+
+      // Salvar status detalhado no Redis
+      await redis.set(`device:${deviceId}:status`, {
+        online: true,
+        food_level,
+        rssi,
+        ip,
+        mode,
+        power_save_enabled,
+        schedules_count,
+        timestamp: new Date().toISOString(),
+      }, 600);
+
+      // Notificar via WebSocket (se disponivel)
+      const device = await query(
+        'SELECT user_id FROM devices WHERE device_id = $1',
+        [deviceId]
+      );
+
+      if (device.rows.length > 0) {
+        const websocketService = require('../services/websocketService');
+        websocketService.sendToUser(device.rows[0].user_id, {
+          type: 'device_status',
+          data: { device_id: deviceId, food_level, mode, online: true },
+        });
+      }
+
+      res.json({ success: true });
+    } catch (error) {
+      logger.error('Update device status error', error);
+      next(error);
+    }
+  }
+
+  // ESP32 busca horarios agendados
+  async getDeviceSchedules(req, res, next) {
+    try {
+      const { deviceId } = req.params;
+
+      logger.info('Device fetching schedules', { deviceId });
+
+      // Buscar dispositivo e power_save
+      const deviceResult = await query(
+        'SELECT id, user_id, power_save FROM devices WHERE device_id = $1 AND deleted_at IS NULL',
+        [deviceId]
+      );
+
+      if (deviceResult.rows.length === 0) {
+        return res.json({ success: true, data: [], power_save: false });
+      }
+
+      const device = deviceResult.rows[0];
+
+      // Buscar horarios ativos do usuario
+      const schedulesResult = await query(
+        `SELECT s.hour, s.minute, s.amount, s.active,
+                s.monday, s.tuesday, s.wednesday, s.thursday, s.friday, s.saturday, s.sunday,
+                p.name as pet_name
+         FROM schedules s
+         JOIN pets p ON p.id = s.pet_id
+         JOIN devices d ON d.id = s.device_id
+         WHERE d.user_id = $1 AND s.active = true AND s.deleted_at IS NULL
+         ORDER BY s.hour, s.minute`,
+        [device.user_id]
+      );
+
+      // Formatar para o ESP32
+      const formatted = schedulesResult.rows.map(s => {
+        // Converter amount para size
+        let size = 'medium';
+        if (s.amount <= 50) size = 'small';
+        else if (s.amount > 100) size = 'large';
+
+        // Converter dias da semana para array
+        const daysArray = [];
+        if (s.sunday) daysArray.push(0);
+        if (s.monday) daysArray.push(1);
+        if (s.tuesday) daysArray.push(2);
+        if (s.wednesday) daysArray.push(3);
+        if (s.thursday) daysArray.push(4);
+        if (s.friday) daysArray.push(5);
+        if (s.saturday) daysArray.push(6);
+
+        return {
+          hour: s.hour,
+          minute: s.minute,
+          size,
+          days: daysArray.length > 0 ? daysArray : [0, 1, 2, 3, 4, 5, 6],
+          active: true,
+          pet: s.pet_name || 'Pet',
+        };
+      });
+
+      // Atualizar last_seen
+      await query(
+        "UPDATE devices SET last_seen_at = NOW(), status = 'online' WHERE device_id = $1",
+        [deviceId]
+      );
+
+      res.json({
+        success: true,
+        data: formatted,
+        power_save: device.power_save || false,
+      });
+    } catch (error) {
+      logger.error('Get device schedules error', error);
+      next(error);
+    }
+  }
+
+  // ESP32 busca comandos pendentes
+  async getDeviceCommands(req, res, next) {
+    try {
+      const { deviceId } = req.params;
+
+      // Atualizar last_seen
+      await query(
+        "UPDATE devices SET last_seen_at = NOW(), status = 'online' WHERE device_id = $1",
+        [deviceId]
+      );
+
+      // Buscar comandos pendentes do Redis
+      const commandsKey = `device:${deviceId}:commands`;
+      const commands = await redis.get(commandsKey);
+
+      if (commands && commands.length > 0) {
+        // Pegar primeiro comando e remover da fila
+        const cmd = commands.shift();
+        if (commands.length > 0) {
+          await redis.set(commandsKey, commands, 3600);
+        } else {
+          await redis.del(commandsKey);
+        }
+
+        logger.info('Command sent to device', { deviceId, command: cmd });
+        return res.json(cmd);
+      }
+
+      res.json({}); // Nenhum comando pendente
+    } catch (error) {
+      logger.error('Get device commands error', error);
+      next(error);
+    }
+  }
+
+  // Toggle power save mode
+  async updatePowerSave(req, res, next) {
+    try {
+      const userId = req.user.id;
+      const { id } = req.params;
+      const { enabled } = req.body;
+
+      const result = await query(
+        `UPDATE devices SET power_save = $1, updated_at = NOW()
+         WHERE id = $2 AND user_id = $3 AND deleted_at IS NULL
+         RETURNING device_id`,
+        [enabled, id, userId]
+      );
+
+      if (result.rows.length === 0) {
+        return res.status(404).json({
+          success: false,
+          message: 'Device not found',
+        });
+      }
+
+      const deviceId = result.rows[0].device_id;
+
+      // Adicionar comando sync para ESP32 buscar nova config
+      const commandsKey = `device:${deviceId}:commands`;
+      const commands = await redis.get(commandsKey) || [];
+      commands.push({ command: 'sync' });
+      await redis.set(commandsKey, commands, 3600);
+
+      logger.info('Power save updated', { deviceId, enabled });
+
+      res.json({
+        success: true,
+        message: `Modo economia ${enabled ? 'ativado' : 'desativado'}`,
+        power_save: enabled,
+      });
+    } catch (error) {
+      logger.error('Update power save error', error);
+      next(error);
+    }
+  }
 }
 
 module.exports = new DevicesController();

@@ -23,6 +23,47 @@ router.post(
   devicesController.registerDevice
 );
 
+// Auto-registro do ESP32 (usa email do usuario)
+router.post(
+  '/auto-register',
+  [
+    body('deviceId').notEmpty().isString(),
+    body('email').notEmpty().isEmail(),
+    body('name').optional().isString(),
+    validate,
+  ],
+  devicesController.autoRegisterDevice
+);
+
+// ESP32 envia status (rota publica - dispositivo se identifica pelo deviceId)
+router.post(
+  '/:deviceId/status',
+  [
+    param('deviceId').notEmpty().isString(),
+    body('food_level').optional().isInt({ min: 0, max: 100 }),
+    body('rssi').optional().isInt(),
+    body('ip').optional().isString(),
+    body('mode').optional().isString(),
+    body('power_save_enabled').optional().isBoolean(),
+    validate,
+  ],
+  devicesController.updateDeviceStatus
+);
+
+// ESP32 busca horarios agendados (rota publica)
+router.get(
+  '/:deviceId/schedules',
+  [param('deviceId').notEmpty().isString(), validate],
+  devicesController.getDeviceSchedules
+);
+
+// ESP32 busca comandos pendentes (rota publica)
+router.get(
+  '/:deviceId/commands',
+  [param('deviceId').notEmpty().isString(), validate],
+  devicesController.getDeviceCommands
+);
+
 // ==================== ROTAS AUTENTICADAS ====================
 
 // All routes below require authentication
@@ -93,6 +134,17 @@ router.post(
   '/:id/restart',
   [param('id').isInt(), validate],
   devicesController.restartDevice
+);
+
+// Toggle power save mode
+router.put(
+  '/:id/power-save',
+  [
+    param('id').isInt(),
+    body('enabled').isBoolean(),
+    validate,
+  ],
+  devicesController.updatePowerSave
 );
 
 module.exports = router;

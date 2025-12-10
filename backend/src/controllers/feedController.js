@@ -210,6 +210,88 @@ class FeedController {
     }
   }
 
+  // ==================== ROTAS ESP32 (PUBLICAS) ====================
+
+  // ESP32 registra alimentacao realizada
+  async logFeeding(req, res, next) {
+    try {
+      const { device_id, size, trigger, food_level_after, pet_name } = req.body;
+
+      logger.info('Feeding log received', { device_id, size, pet_name });
+
+      // Buscar dispositivo
+      const deviceResult = await query(
+        'SELECT id, user_id FROM devices WHERE device_id = $1',
+        [device_id]
+      );
+
+      if (deviceResult.rows.length === 0) {
+        logger.warn('Device not found for feeding log', { device_id });
+        return res.json({ success: false, message: 'Dispositivo não encontrado' });
+      }
+
+      const device = deviceResult.rows[0];
+
+      // Converter size para amount
+      const amounts = { small: 50, medium: 100, large: 150 };
+      const amount = amounts[size] || 100;
+
+      // Buscar pet pelo nome ou pelo device_id
+      let petQuery, petParams;
+      if (pet_name) {
+        petQuery = 'SELECT id, name FROM pets WHERE name = $1 AND user_id = $2 AND deleted_at IS NULL';
+        petParams = [pet_name, device.user_id];
+      } else {
+        petQuery = 'SELECT id, name FROM pets WHERE device_id = $1 AND deleted_at IS NULL LIMIT 1';
+        petParams = [device.id];
+      }
+
+      const petResult = await query(petQuery, petParams);
+
+      if (petResult.rows.length === 0) {
+        logger.warn('Pet not found for feeding log', { device_id, pet_name });
+        return res.json({ success: true, message: 'Pet não encontrado, histórico não registrado' });
+      }
+
+      const pet = petResult.rows[0];
+
+      // Registrar no histórico
+      await query(
+        `INSERT INTO feedings (device_id, pet_id, amount, trigger, status, timestamp)
+         VALUES ($1, $2, $3, $4, 'success', NOW())`,
+        [device.id, pet.id, amount, trigger || 'scheduled']
+      );
+
+      // Atualizar food_level do dispositivo
+      if (food_level_after !== undefined) {
+        await query(
+          'UPDATE devices SET food_level = $1 WHERE id = $2',
+          [food_level_after, device.id]
+        );
+      }
+
+      // Notificar via WebSocket
+      websocketService.sendToUser(device.user_id, {
+        type: 'feeding_complete',
+        data: {
+          pet_name: pet.name,
+          amount,
+          size,
+          timestamp: new Date().toISOString(),
+        },
+      });
+
+      logger.info('Feeding logged', { device_id, pet_name: pet.name, amount });
+
+      res.json({ success: true });
+    } catch (error) {
+      logger.error('Log feeding error', error);
+      next(error);
+    }
+  }
+
+  // ==================== ROTAS AUTENTICADAS ====================
+
   // Create schedule
   async createSchedule(req, res, next) {
     try {

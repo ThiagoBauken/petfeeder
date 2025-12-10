@@ -94,16 +94,21 @@ int currentStep = 0;
 // Contadores RTC (sobrevivem ao Deep Sleep)
 RTC_DATA_ATTR int bootCount = 0;
 RTC_DATA_ATTR bool deviceRegistered = false;
-RTC_DATA_ATTR uint16_t executedToday = 0;      // Bitmask: bit N = schedule N já executou hoje
 RTC_DATA_ATTR int lastExecutionDay = -1;        // Dia do mês da última execução
+
+// Array para rastrear horários executados hoje (até 16 slots)
+// Formato: hora*60 + minuto (ex: 00:09 = 9, 14:30 = 870)
+// Usar valor 0xFFFF para indicar slot vazio
+RTC_DATA_ATTR uint16_t executedTimes[16];       // Horários já executados hoje (minutos desde meia-noite)
+RTC_DATA_ATTR uint8_t executedCount = 0;        // Quantos foram executados hoje
 
 // Tempo offline (sobrevive ao Deep Sleep)
 RTC_DATA_ATTR time_t lastSyncedTime = 0;       // Última hora sincronizada (epoch)
 RTC_DATA_ATTR uint32_t lastSleepDuration = 0;  // Duração do último sono (segundos)
 RTC_DATA_ATTR bool timeWasSynced = false;      // Se já sincronizou pelo menos uma vez
 
-// Configuração de fallback
-#define FALLBACK_WINDOW_MINUTES 30  // Executa horários perdidos nos últimos 30 min
+// Configuração de fallback (modo ativo verifica a cada 1 min, então 3 min é suficiente)
+#define FALLBACK_WINDOW_MINUTES 3  // Executa horários perdidos nos últimos 3 min
 
 struct Schedule {
   int hour;
@@ -821,6 +826,39 @@ bool estimateOfflineTime(struct tm* timeinfo) {
 
 // ==================== VERIFICACAO DE HORARIOS ====================
 
+// Verifica se um horário já foi executado hoje (por hora:minuto, não por índice)
+bool wasTimeExecutedToday(int hour, int minute) {
+  uint16_t timeKey = hour * 60 + minute;
+  for (int i = 0; i < executedCount && i < 16; i++) {
+    if (executedTimes[i] == timeKey) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Marca um horário como executado hoje
+void markTimeAsExecuted(int hour, int minute) {
+  if (executedCount >= 16) {
+    Serial.println("[AVISO] Limite de 16 execucoes/dia atingido!");
+    return;
+  }
+  uint16_t timeKey = hour * 60 + minute;
+  executedTimes[executedCount] = timeKey;
+  executedCount++;
+  Serial.printf("[EXEC] Marcado %02d:%02d como executado (total: %d)\n", hour, minute, executedCount);
+}
+
+// Reseta as execuções para novo dia
+void resetDailyExecutions(int dayOfMonth) {
+  Serial.printf("[HORARIOS] Novo dia (%d), resetando execucoes\n", dayOfMonth);
+  for (int i = 0; i < 16; i++) {
+    executedTimes[i] = 0xFFFF;  // Marca como vazio
+  }
+  executedCount = 0;
+  lastExecutionDay = dayOfMonth;
+}
+
 void checkScheduledFeeding() {
   struct tm timeinfo;
   bool usingEstimatedTime = false;
@@ -843,50 +881,73 @@ void checkScheduledFeeding() {
 
   // Reseta execuções se mudou o dia
   if (lastExecutionDay != currentDayOfMonth) {
-    Serial.printf("[HORARIOS] Novo dia (%d), resetando execucoes\n", currentDayOfMonth);
-    executedToday = 0;
-    lastExecutionDay = currentDayOfMonth;
+    resetDailyExecutions(currentDayOfMonth);
   }
 
-  Serial.printf("[HORARIOS] Verificando %d horarios (atual: %02d:%02d, dia=%d)%s\n",
-                scheduleCount, currentHour, currentMinute, currentDay,
-                usingEstimatedTime ? " [OFFLINE/ESTIMADO]" : "");
+  Serial.printf("[HORARIOS] Verificando %d horarios (atual: %02d:%02d:%02d, dia_semana=%d)%s\n",
+                scheduleCount, currentHour, currentMinute, timeinfo.tm_sec, currentDay,
+                usingEstimatedTime ? " [OFFLINE]" : "");
+  Serial.printf("[HORARIOS] Execucoes hoje: %d\n", executedCount);
 
   for (int i = 0; i < scheduleCount && i < 10; i++) {
-    if (!schedules[i].active) continue;
-    if (!(schedules[i].days & (1 << currentDay))) continue;
+    if (!schedules[i].active) {
+      Serial.printf("  [%d] %02d:%02d %s -> INATIVO\n", i, schedules[i].hour, schedules[i].minute, schedules[i].petName);
+      continue;
+    }
 
-    // Já executou hoje?
-    if (executedToday & (1 << i)) {
-      continue;  // Pula, já foi executado
+    if (!(schedules[i].days & (1 << currentDay))) {
+      Serial.printf("  [%d] %02d:%02d %s -> NAO HOJE (dias=0x%02X, hoje=%d)\n",
+                    i, schedules[i].hour, schedules[i].minute, schedules[i].petName, schedules[i].days, currentDay);
+      continue;
+    }
+
+    // Verifica se este horário específico já foi executado hoje (usando hora:minuto, não índice!)
+    if (wasTimeExecutedToday(schedules[i].hour, schedules[i].minute)) {
+      Serial.printf("  [%d] %02d:%02d %s -> JA EXECUTADO HOJE\n",
+                    i, schedules[i].hour, schedules[i].minute, schedules[i].petName);
+      continue;
     }
 
     int scheduleMins = schedules[i].hour * 60 + schedules[i].minute;
     int diffMins = currentMins - scheduleMins;
 
+    // DEBUG: Mostra cada horário sendo verificado
+    Serial.printf("  [%d] %02d:%02d %s dose=%d diff=%d min ",
+                  i, schedules[i].hour, schedules[i].minute,
+                  schedules[i].petName, schedules[i].doseSize, diffMins);
+
     // Executa se:
-    // 1. Está no horário (até 2 min de tolerância)
+    // 1. Está no horário EXATO ou até 1 min depois (NUNCA antes!)
     // 2. OU passou recentemente (fallback - até FALLBACK_WINDOW_MINUTES)
-    bool isOnTime = (diffMins >= -2 && diffMins <= 2);
-    bool isMissed = (diffMins > 2 && diffMins <= FALLBACK_WINDOW_MINUTES);
+    bool isOnTime = (diffMins >= 0 && diffMins <= 1);  // Só no horário ou 1 min depois
+    bool isMissed = (diffMins > 1 && diffMins <= FALLBACK_WINDOW_MINUTES);
 
     if (isOnTime || isMissed) {
+      Serial.println(isOnTime ? "-> EXECUTAR!" : "-> EXECUTAR (recuperando)");
       if (isMissed) {
-        Serial.printf("[FALLBACK] Horario perdido %02d:%02d (passou %d min)\n",
+        Serial.printf("[FALLBACK] Horario %02d:%02d perdido (passou %d min) - recuperando...\n",
                       schedules[i].hour, schedules[i].minute, diffMins);
       }
 
-      Serial.printf("[ALIMENTAR] %s - Horario %02d:%02d\n",
-                    schedules[i].petName, schedules[i].hour, schedules[i].minute);
+      Serial.printf("\n*** ALIMENTANDO: %s - Horario %02d:%02d - Dose: %s ***\n\n",
+                    schedules[i].petName, schedules[i].hour, schedules[i].minute,
+                    schedules[i].doseSize == 1 ? "Pequena" : schedules[i].doseSize == 3 ? "Grande" : "Media");
 
       // Marca como executado ANTES de dispensar (evita duplicação)
-      executedToday |= (1 << i);
+      markTimeAsExecuted(schedules[i].hour, schedules[i].minute);
 
       dispense(schedules[i].doseSize);
       sendFeedingLog(schedules[i].doseSize, schedules[i].petName);  // Envia nome do pet
       sendStatus();  // Também verifica nível após alimentar
 
       // Continua verificando outros horários (pode ter mais de um no mesmo período)
+    } else {
+      // Mostra motivo de não executar
+      if (diffMins < 0) {
+        Serial.printf("-> AGUARDAR (%d min restantes)\n", -diffMins);
+      } else {
+        Serial.printf("-> PASSOU (fora da janela de %d min)\n", FALLBACK_WINDOW_MINUTES);
+      }
     }
   }
 }
@@ -1142,7 +1203,7 @@ void startActiveMode() {
       schedules[i].days,
       schedules[i].active);
   }
-  Serial.printf("executedToday bitmask: 0x%04X\n", executedToday);
+  Serial.printf("Execucoes hoje: %d horarios\n", executedCount);
   Serial.println("========================================\n");
 
   // Se nao tem horarios carregados, tenta buscar novamente

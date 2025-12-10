@@ -6,7 +6,25 @@ const { validate, apiLimiter } = require('../middlewares');
 
 const router = express.Router();
 
-// All routes require authentication
+// ==================== ROTAS PUBLICAS (ESP32) ====================
+
+// ESP32 registra alimentacao realizada
+router.post(
+  '/log',
+  [
+    body('device_id').notEmpty().isString(),
+    body('size').isIn(['small', 'medium', 'large']),
+    body('trigger').optional().isString(),
+    body('food_level_after').optional().isInt({ min: 0, max: 100 }),
+    body('pet_name').optional().isString(),
+    validate,
+  ],
+  feedController.logFeeding
+);
+
+// ==================== ROTAS AUTENTICADAS ====================
+
+// All routes below require authentication
 router.use(verifyToken);
 
 // Manual feeding
