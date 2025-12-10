@@ -111,6 +111,19 @@ async function loadDevices() {
         const result = await api.getDevices();
         if (result.success) {
             state.devices = result.data;
+
+            // Inicializar deviceStatus com dados do banco (food_level, last_seen)
+            // Isso evita mostrar "Aguardando..." quando já temos dados salvos
+            state.devices.forEach(device => {
+                if (device.food_level !== null && device.food_level !== undefined) {
+                    state.deviceStatus[device.device_id] = {
+                        food_level: device.food_level,
+                        distance_cm: null,
+                        lastSeen: device.last_seen || null
+                    };
+                }
+            });
+
             renderDevicesList();
             updateDeviceSelects();
             renderFoodLevels();

@@ -97,6 +97,11 @@ RTC_DATA_ATTR bool deviceRegistered = false;
 RTC_DATA_ATTR uint16_t executedToday = 0;      // Bitmask: bit N = schedule N já executou hoje
 RTC_DATA_ATTR int lastExecutionDay = -1;        // Dia do mês da última execução
 
+// Tempo offline (sobrevive ao Deep Sleep)
+RTC_DATA_ATTR time_t lastSyncedTime = 0;       // Última hora sincronizada (epoch)
+RTC_DATA_ATTR uint32_t lastSleepDuration = 0;  // Duração do último sono (segundos)
+RTC_DATA_ATTR bool timeWasSynced = false;      // Se já sincronizou pelo menos uma vez
+
 // Configuração de fallback
 #define FALLBACK_WINDOW_MINUTES 30  // Executa horários perdidos nos últimos 30 min
 
@@ -122,6 +127,7 @@ void startConfigMode();
 void startWaitingMode();
 void scheduleNextWakeup();
 void goToSleep(uint32_t seconds);
+bool estimateOfflineTime(struct tm* timeinfo);
 void checkScheduledFeeding();
 bool fetchSchedules();
 void sendStatus();
@@ -168,6 +174,12 @@ bool syncTime() {
                   timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
     Serial.printf("[NTP] Data: %02d/%02d/%04d (dia da semana: %d)\n",
                   timeinfo.tm_mday, timeinfo.tm_mon + 1, timeinfo.tm_year + 1900, timeinfo.tm_wday);
+
+    // Salva tempo sincronizado para uso offline
+    time(&lastSyncedTime);
+    timeWasSynced = true;
+    Serial.printf("[NTP] Tempo salvo para modo offline: %ld\n", lastSyncedTime);
+
     return true;
   } else {
     Serial.println("[NTP] FALHA na sincronizacao!");
@@ -394,6 +406,7 @@ void loadConfig() {
   deviceId = getDeviceId();
   userEmail = preferences.getString("email", "");
   scheduleCount = preferences.getInt("schedCount", 0);
+  powerSaveEnabled = preferences.getBool("powerSave", false);  // Carrega config de economia
 
   // Carrega horarios da flash
   for (int i = 0; i < scheduleCount && i < 10; i++) {
@@ -403,6 +416,9 @@ void loadConfig() {
     schedules[i].doseSize = preferences.getInt((key + "d").c_str(), 2);
     schedules[i].active = preferences.getBool((key + "a").c_str(), true);
     schedules[i].days = preferences.getUChar((key + "w").c_str(), 0x7F);  // Todos os dias
+    String petName = preferences.getString((key + "p").c_str(), "Pet");
+    strncpy(schedules[i].petName, petName.c_str(), 31);
+    schedules[i].petName[31] = '\0';
   }
 
   Serial.println("\n[CONFIG] Carregado:");
@@ -410,6 +426,7 @@ void loadConfig() {
   Serial.printf("  Email: %s\n", userEmail.length() > 0 ? userEmail.c_str() : "(vazio)");
   Serial.printf("  Device: %s\n", deviceId.c_str());
   Serial.printf("  Horarios: %d\n", scheduleCount);
+  Serial.printf("  Economia: %s\n", powerSaveEnabled ? "ON (Deep Sleep)" : "OFF (Polling)");
 }
 
 void saveConfig(String ssid, String password, String email) {
@@ -426,6 +443,7 @@ void saveConfig(String ssid, String password, String email) {
 
 void saveSchedulesToFlash() {
   preferences.putInt("schedCount", scheduleCount);
+  preferences.putBool("powerSave", powerSaveEnabled);  // Salva config de economia
   for (int i = 0; i < scheduleCount && i < 10; i++) {
     String key = "s" + String(i);
     preferences.putInt((key + "h").c_str(), schedules[i].hour);
@@ -433,8 +451,10 @@ void saveSchedulesToFlash() {
     preferences.putInt((key + "d").c_str(), schedules[i].doseSize);
     preferences.putBool((key + "a").c_str(), schedules[i].active);
     preferences.putUChar((key + "w").c_str(), schedules[i].days);
+    preferences.putString((key + "p").c_str(), schedules[i].petName);  // Salva nome do pet
   }
-  Serial.printf("[CONFIG] %d horarios salvos na flash\n", scheduleCount);
+  Serial.printf("[CONFIG] %d horarios salvos na flash (powerSave=%s)\n",
+                scheduleCount, powerSaveEnabled ? "ON" : "OFF");
 }
 
 void clearConfig() {
@@ -759,6 +779,16 @@ void scheduleNextWakeup() {
 void goToSleep(uint32_t seconds) {
   Serial.printf("[SLEEP] Dormindo por %d segundos...\n\n", seconds);
 
+  // Salva duração do sono para estimar tempo offline
+  lastSleepDuration = seconds;
+
+  // Atualiza lastSyncedTime antes de dormir (se tiver tempo sincronizado)
+  if (timeWasSynced) {
+    time(&lastSyncedTime);  // Salva o tempo atual
+    Serial.printf("[SLEEP] Tempo salvo: %ld (vai acordar em ~%ld)\n",
+                  lastSyncedTime, lastSyncedTime + seconds);
+  }
+
   WiFi.disconnect(true);
   WiFi.mode(WIFI_OFF);
   stopMotor();
@@ -767,13 +797,42 @@ void goToSleep(uint32_t seconds) {
   esp_deep_sleep_start();
 }
 
+// Estima tempo atual quando offline (baseado no último tempo sincronizado + duração do sono)
+bool estimateOfflineTime(struct tm* timeinfo) {
+  if (!timeWasSynced || lastSyncedTime == 0) {
+    Serial.println("[OFFLINE] Nunca sincronizou - impossivel estimar tempo");
+    return false;
+  }
+
+  // Estima tempo atual = último tempo salvo + duração do sono
+  time_t estimatedTime = lastSyncedTime + lastSleepDuration;
+
+  // Converte para struct tm
+  struct tm* tmpTime = localtime(&estimatedTime);
+  if (tmpTime) {
+    memcpy(timeinfo, tmpTime, sizeof(struct tm));
+    Serial.printf("[OFFLINE] Tempo estimado: %02d:%02d (baseado em sync anterior + %ds de sono)\n",
+                  timeinfo->tm_hour, timeinfo->tm_min, lastSleepDuration);
+    return true;
+  }
+
+  return false;
+}
+
 // ==================== VERIFICACAO DE HORARIOS ====================
 
 void checkScheduledFeeding() {
   struct tm timeinfo;
+  bool usingEstimatedTime = false;
+
   if (!getLocalTime(&timeinfo)) {
-    Serial.println("[HORARIOS] Sem hora sincronizada, pulando verificacao");
-    return;
+    // Tenta usar tempo estimado (modo offline)
+    if (estimateOfflineTime(&timeinfo)) {
+      usingEstimatedTime = true;
+    } else {
+      Serial.println("[HORARIOS] Sem hora - nem NTP nem estimativa. Pulando verificacao.");
+      return;
+    }
   }
 
   int currentHour = timeinfo.tm_hour;
@@ -789,8 +848,9 @@ void checkScheduledFeeding() {
     lastExecutionDay = currentDayOfMonth;
   }
 
-  Serial.printf("[HORARIOS] Verificando %d horarios (atual: %02d:%02d, dia=%d)\n",
-                scheduleCount, currentHour, currentMinute, currentDay);
+  Serial.printf("[HORARIOS] Verificando %d horarios (atual: %02d:%02d, dia=%d)%s\n",
+                scheduleCount, currentHour, currentMinute, currentDay,
+                usingEstimatedTime ? " [OFFLINE/ESTIMADO]" : "");
 
   for (int i = 0; i < scheduleCount && i < 10; i++) {
     if (!schedules[i].active) continue;
@@ -1045,22 +1105,58 @@ void startConfigMode() {
 
 // Modo ativo: com horarios mas SEM Deep Sleep (power_save = false)
 unsigned long lastScheduleCheck = 0;
-#define SCHEDULE_CHECK_INTERVAL_MS 300000  // Verificar horarios a cada 5 min (fallback de 30 min garante execucao)
+#define SCHEDULE_CHECK_INTERVAL_MS 60000  // Verificar horarios a cada 1 min (dentro da janela de tolerancia)
 
 void startActiveMode() {
   activeMode = true;
   waitingForSchedules = false;
   lastPollTime = millis();  // Resetar para começar polling imediatamente
-  lastScheduleCheck = millis();
+  lastScheduleCheck = 0;    // Força verificacao imediata de horarios
   Serial.println("\n========================================");
   Serial.println("    MODO ATIVO (SEM DEEP SLEEP)");
   Serial.println("========================================");
   Serial.println("Modo economia DESATIVADO pelo site");
   Serial.printf("IP local: http://%s\n", WiFi.localIP().toString().c_str());
   Serial.println("Verificando comandos a cada 5s");
-  Serial.println("Verificando horarios a cada 5min");
+  Serial.println("Verificando horarios a cada 1min");
   Serial.printf("Fallback: %d min (executa horarios perdidos)\n", FALLBACK_WINDOW_MINUTES);
+  Serial.println("----------------------------------------");
+
+  // DEBUG: Mostra hora atual e horarios carregados
+  struct tm timeinfo;
+  if (getLocalTime(&timeinfo)) {
+    Serial.printf("HORA ATUAL: %02d:%02d (dia semana=%d)\n",
+                  timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_wday);
+  } else {
+    Serial.println("HORA: NTP NAO SINCRONIZADO!");
+  }
+
+  Serial.printf("HORARIOS CARREGADOS: %d\n", scheduleCount);
+  for (int i = 0; i < scheduleCount && i < 10; i++) {
+    Serial.printf("  [%d] %02d:%02d %s dose=%d dias=0x%02X ativo=%d\n",
+      i + 1,
+      schedules[i].hour,
+      schedules[i].minute,
+      schedules[i].petName,
+      schedules[i].doseSize,
+      schedules[i].days,
+      schedules[i].active);
+  }
+  Serial.printf("executedToday bitmask: 0x%04X\n", executedToday);
   Serial.println("========================================\n");
+
+  // Se nao tem horarios carregados, tenta buscar novamente
+  if (scheduleCount == 0) {
+    Serial.println("[AVISO] Nenhum horario carregado! Tentando sincronizar...");
+    fetchSchedules();
+    Serial.printf("Apos sync: %d horarios\n", scheduleCount);
+  }
+
+  // Verifica horarios imediatamente ao iniciar modo ativo
+  checkScheduledFeeding();
+
+  // Envia status com modo correto (activeMode = true agora)
+  sendStatus();
 
   // Servidor local
   webServer.on("/", []() {
@@ -1357,9 +1453,6 @@ void handleNormalBoot() {
   // Busca horarios
   fetchSchedules();
 
-  // Envia status
-  sendStatus();
-
   // Verifica comandos
   checkCommands();
 
@@ -1374,11 +1467,12 @@ void handleNormalBoot() {
   if (scheduleCount > 0 && powerSaveEnabled) {
     Serial.println("\n>>> DECISAO: Deep Sleep (horarios + economia ON)");
     Serial.println("[SLEEP] Ativando modo economia (Deep Sleep)...");
+    sendStatus();  // Envia status ANTES de dormir
     scheduleNextWakeup();
   } else if (scheduleCount > 0 && !powerSaveEnabled) {
     Serial.println("\n>>> DECISAO: Modo Ativo (horarios + economia OFF)");
     Serial.println("[ATIVO] Modo economia DESATIVADO - polling continuo");
-    startActiveMode();
+    startActiveMode();  // startActiveMode já envia status via checkScheduledFeeding
   } else {
     Serial.println("\n>>> DECISAO: Aguardando (sem horarios)");
     startWaitingMode();
@@ -1456,6 +1550,7 @@ void loop() {
     // Verifica horarios a cada minuto
     if (millis() - lastScheduleCheck > SCHEDULE_CHECK_INTERVAL_MS) {
       lastScheduleCheck = millis();
+      Serial.println("[SCHEDULE] Verificando horarios programados...");
       checkScheduledFeeding();
     }
 
