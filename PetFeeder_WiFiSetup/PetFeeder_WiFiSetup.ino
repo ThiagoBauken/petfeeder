@@ -376,20 +376,7 @@ float readFoodLevel() {
   // Limita entre 0 e 100
   level = constrain(level, 0, 100);
 
-  // Suavização CONDICIONAL: só aplica para mudanças pequenas (ruído)
-  // Mudanças grandes (> 15%) são aceitas imediatamente
-  if (lastValidLevel >= 0) {
-    float diff = abs(level - lastValidLevel);
-    if (diff < 15) {
-      // Mudança pequena = provável ruído, aplica suavização
-      level = level * 0.7 + lastValidLevel * 0.3;
-      Serial.printf("[SENSOR] Suavizacao aplicada (diff=%.1f%%)\n", diff);
-    } else {
-      // Mudança grande = real, aceita valor novo
-      Serial.printf("[SENSOR] Mudanca grande detectada (diff=%.1f%%), valor aceito\n", diff);
-    }
-  }
-
+  // Armazena última leitura válida (sem suavização - mediana já remove ruído)
   lastValidLevel = level;
 
   Serial.printf("[SENSOR] Nivel: %.0f%% (dist=%.1fcm, cheio=%dcm, vazio=%dcm)\n",

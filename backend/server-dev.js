@@ -1147,6 +1147,13 @@ const lastFoodAlert = new Map();  // Rastreia último alerta enviado por disposi
 app.get('/api/devices/:deviceId/commands', (req, res) => {
   const deviceId = req.params.deviceId;
 
+  // Atualiza last_seen para manter dispositivo "online" enquanto faz polling
+  const now = new Date().toISOString();
+  db.run(
+    'UPDATE devices SET last_seen = ?, status = ? WHERE device_id = ?',
+    [now, 'online', deviceId]
+  );
+
   // Buscar comando pendente
   const commands = deviceCommands.get(deviceId) || [];
 
