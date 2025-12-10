@@ -127,7 +127,7 @@ bool fetchSchedules();
 void sendStatus();
 void registerDevice();
 void checkCommands();
-void sendFeedingLog(int doseSize);
+void sendFeedingLog(int doseSize, const char* petName = nullptr);
 void dispense(int doseSize);
 float readFoodLevel();
 void handleRoot();
@@ -376,10 +376,18 @@ float readFoodLevel() {
   // Limita entre 0 e 100
   level = constrain(level, 0, 100);
 
-  // Suavização: média com leitura anterior (evita picos)
+  // Suavização CONDICIONAL: só aplica para mudanças pequenas (ruído)
+  // Mudanças grandes (> 15%) são aceitas imediatamente
   if (lastValidLevel >= 0) {
-    // 70% nova leitura + 30% anterior
-    level = level * 0.7 + lastValidLevel * 0.3;
+    float diff = abs(level - lastValidLevel);
+    if (diff < 15) {
+      // Mudança pequena = provável ruído, aplica suavização
+      level = level * 0.7 + lastValidLevel * 0.3;
+      Serial.printf("[SENSOR] Suavizacao aplicada (diff=%.1f%%)\n", diff);
+    } else {
+      // Mudança grande = real, aceita valor novo
+      Serial.printf("[SENSOR] Mudanca grande detectada (diff=%.1f%%), valor aceito\n", diff);
+    }
   }
 
   lastValidLevel = level;
@@ -534,7 +542,7 @@ void sendStatus() {
   }
 }
 
-void sendFeedingLog(int doseSize) {
+void sendFeedingLog(int doseSize, const char* petName) {
   if (!wifiConnected || deviceId.length() == 0) return;
 
   HTTPClient http;
@@ -549,13 +557,20 @@ void sendFeedingLog(int doseSize) {
   doc["size"] = size;
   doc["trigger"] = "scheduled";
   doc["food_level_after"] = (int)readFoodLevel();
+  if (petName != nullptr) {
+    doc["pet_name"] = petName;  // Envia nome do pet para o servidor
+  }
 
   String json;
   serializeJson(doc, json);
 
+  Serial.printf("[LOG] Enviando: %s\n", json.c_str());
+
   int httpCode = http.POST(json);
   if (httpCode == 200) {
-    Serial.println("[LOG] Alimentacao registrada");
+    Serial.println("[LOG] Alimentacao registrada no servidor");
+  } else {
+    Serial.printf("[LOG] ERRO ao registrar: HTTP %d\n", httpCode);
   }
   http.end();
 }
@@ -821,8 +836,8 @@ void checkScheduledFeeding() {
       executedToday |= (1 << i);
 
       dispense(schedules[i].doseSize);
-      sendFeedingLog(schedules[i].doseSize);
-      sendStatus();
+      sendFeedingLog(schedules[i].doseSize, schedules[i].petName);  // Envia nome do pet
+      sendStatus();  // Também verifica nível após alimentar
 
       // Continua verificando outros horários (pode ter mais de um no mesmo período)
     }

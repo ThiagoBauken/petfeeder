@@ -216,6 +216,23 @@ function connectWebSocket() {
         showToast(data.data.message, 'warning');
     });
 
+    ws.on('food_alert', (data) => {
+        console.log('Food alert:', data);
+        const alertData = data.data || data;
+        const alertType = alertData.alert_type === 'critical' ? 'error' : 'warning';
+        showToast(alertData.message, alertType, 10000);  // 10 segundos para alertas importantes
+
+        // Atualiza a UI do nível de comida
+        if (alertData.device_id && alertData.food_level !== undefined) {
+            state.deviceStatus[alertData.device_id] = {
+                ...state.deviceStatus[alertData.device_id],
+                food_level: alertData.food_level,
+                lastSeen: alertData.timestamp || new Date().toISOString()
+            };
+            renderFoodLevels();
+        }
+    });
+
     ws.on('disconnected', () => {
         updateConnectionStatus();
     });
@@ -1316,7 +1333,7 @@ function closeAllModals() {
 // TOAST NOTIFICATIONS
 // ===================================
 
-function showToast(message, type = 'info') {
+function showToast(message, type = 'info', duration = null) {
     const toast = document.getElementById('toast');
     const icons = {
         success: 'check-circle',
@@ -1330,7 +1347,7 @@ function showToast(message, type = 'info') {
 
     setTimeout(() => {
         toast.classList.remove('show');
-    }, CONFIG.TOAST_DURATION);
+    }, duration || CONFIG.TOAST_DURATION);
 }
 
 // ===================================

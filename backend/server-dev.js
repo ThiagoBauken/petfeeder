@@ -1141,6 +1141,7 @@ app.get('/api/status', (req, res) => {
 // Fila de comandos pendentes por dispositivo
 const deviceCommands = new Map();
 const deviceStatus = new Map();
+const lastFoodAlert = new Map();  // Rastreia último alerta enviado por dispositivo
 
 // ESP32 busca comandos pendentes
 app.get('/api/devices/:deviceId/commands', (req, res) => {
@@ -1205,7 +1206,7 @@ app.post('/api/devices/:deviceId/status', (req, res) => {
   );
 
   // Notificar via WebSocket
-  db.get('SELECT user_id FROM devices WHERE device_id = ?', [deviceId], (err, device) => {
+  db.get('SELECT user_id, name FROM devices WHERE device_id = ?', [deviceId], (err, device) => {
     if (device) {
       sendToUser(device.user_id, {
         type: 'device_status',
@@ -1220,6 +1221,49 @@ app.post('/api/devices/:deviceId/status', (req, res) => {
           schedules_count
         }
       });
+
+      // ========== ALERTAS DE NÍVEL BAIXO ==========
+      const lastAlert = lastFoodAlert.get(deviceId) || { level: 100, timestamp: 0 };
+      const currentLevel = food_level || 0;
+      const deviceName = device.name || deviceId;
+
+      // Determina qual alerta enviar (evita repetição)
+      let alertType = null;
+      let alertMessage = null;
+
+      if (currentLevel <= 10 && lastAlert.level > 10) {
+        // Cruzou threshold de 10% - ração acabando!
+        alertType = 'critical';
+        alertMessage = `⚠️ Ração acabando! ${deviceName} está com apenas ${currentLevel}% de ração.`;
+        console.log(`🚨 ALERTA CRÍTICO: ${deviceId} com ${currentLevel}% de ração`);
+      } else if (currentLevel <= 50 && currentLevel > 10 && lastAlert.level > 50) {
+        // Cruzou threshold de 50% - metade
+        alertType = 'warning';
+        alertMessage = `📉 Ração na metade! ${deviceName} está com ${currentLevel}% de ração.`;
+        console.log(`⚠️ ALERTA: ${deviceId} com ${currentLevel}% de ração (metade)`);
+      }
+
+      // Envia alerta se necessário
+      if (alertType && alertMessage) {
+        sendToUser(device.user_id, {
+          type: 'food_alert',
+          data: {
+            device_id: deviceId,
+            device_name: deviceName,
+            food_level: currentLevel,
+            alert_type: alertType,
+            message: alertMessage,
+            timestamp: now
+          }
+        });
+
+        // Atualiza último alerta enviado
+        lastFoodAlert.set(deviceId, { level: currentLevel, timestamp: Date.now() });
+      } else if (currentLevel > 50 && lastAlert.level <= 50) {
+        // Reabasteceu - reseta o rastreamento
+        lastFoodAlert.set(deviceId, { level: currentLevel, timestamp: Date.now() });
+        console.log(`✅ ${deviceId} reabastecido: ${currentLevel}%`);
+      }
     }
   });
 
@@ -1228,44 +1272,71 @@ app.post('/api/devices/:deviceId/status', (req, res) => {
 
 // ESP32 registra alimentação
 app.post('/api/feed/log', (req, res) => {
-  const { device_id, size, steps, food_level_after, trigger } = req.body;
+  const { device_id, size, steps, food_level_after, trigger, pet_name } = req.body;
 
-  console.log(`🍽️ Alimentação registrada: ${device_id} - ${size} (${steps} passos)`);
+  console.log(`🍽️ Alimentação registrada: ${device_id} - ${size} - pet: ${pet_name || 'N/A'}`);
 
-  // Buscar pet e dispositivo
-  db.get(
-    `SELECT d.id as device_db_id, d.user_id, p.id as pet_id, p.name as pet_name
-     FROM devices d
-     LEFT JOIN pets p ON p.device_id = d.id
-     WHERE d.device_id = ?`,
-    [device_id],
-    (err, data) => {
-      if (data && data.pet_id) {
-        // Calcular gramas baseado no size
-        const amounts = { small: 50, medium: 100, large: 150 };
-        const amount = amounts[size] || 100;
+  // Buscar dispositivo primeiro
+  db.get('SELECT id, user_id FROM devices WHERE device_id = ?', [device_id], (err, device) => {
+    if (err || !device) {
+      console.log(`⚠️ Dispositivo ${device_id} não encontrado`);
+      return res.json({ success: false, message: 'Dispositivo não encontrado' });
+    }
 
-        // Registrar no histórico
-        db.run(
-          'INSERT INTO feeding_history (pet_id, device_id, amount, trigger_type) VALUES (?, ?, ?, ?)',
-          [data.pet_id, data.device_db_id, amount, trigger || 'remote']
-        );
+    // Calcular gramas baseado no size
+    const amounts = { small: 50, medium: 100, large: 150 };
+    const amount = amounts[size] || 100;
 
-        // Notificar via WebSocket
-        sendToUser(data.user_id, {
-          type: 'feeding_complete',
-          data: {
-            pet_name: data.pet_name,
-            amount,
-            size,
-            timestamp: new Date().toISOString()
-          }
-        });
+    // Buscar pet pelo nome (enviado pelo ESP32) ou pelo device_id
+    let petQuery;
+    let petParams;
+
+    if (pet_name) {
+      // ESP32 enviou o nome do pet - buscar por nome e user_id
+      petQuery = 'SELECT id, name FROM pets WHERE name = ? AND user_id = ?';
+      petParams = [pet_name, device.user_id];
+    } else {
+      // Fallback: buscar pet vinculado ao device
+      petQuery = 'SELECT id, name FROM pets WHERE device_id = ?';
+      petParams = [device.id];
+    }
+
+    db.get(petQuery, petParams, (err, pet) => {
+      if (err || !pet) {
+        console.log(`⚠️ Pet não encontrado para ${device_id}. Query: ${petQuery}, Params: ${petParams}`);
+        // Ainda retorna sucesso, mas não registra no histórico
+        return res.json({ success: true, message: 'Pet não encontrado, histórico não registrado' });
       }
 
+      console.log(`✅ Pet encontrado: ${pet.name} (id: ${pet.id})`);
+
+      // Registrar no histórico
+      db.run(
+        'INSERT INTO feeding_history (pet_id, device_id, amount, trigger_type) VALUES (?, ?, ?, ?)',
+        [pet.id, device.id, amount, trigger || 'remote'],
+        function(err) {
+          if (err) {
+            console.log(`❌ Erro ao salvar histórico: ${err.message}`);
+          } else {
+            console.log(`📝 Histórico salvo: pet_id=${pet.id}, amount=${amount}g, trigger=${trigger}`);
+          }
+        }
+      );
+
+      // Notificar via WebSocket
+      sendToUser(device.user_id, {
+        type: 'feeding_complete',
+        data: {
+          pet_name: pet.name,
+          amount,
+          size,
+          timestamp: new Date().toISOString()
+        }
+      });
+
       res.json({ success: true });
-    }
-  );
+    });
+  });
 });
 
 // Dashboard envia comando para ESP32
