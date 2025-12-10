@@ -57,14 +57,15 @@ String serverUrl = "https://telegram-petfeeder.pbzgje.easypanel.host";
 #define RESET_PIN 0
 
 // Intervalos
-#define POLL_INTERVAL_MS 30000       // 30s quando aguardando config
-#define SYNC_INTERVAL_HOURS 6        // Sync a cada 6h
-#define STATUS_INTERVAL_MS 300000    // Status a cada 5min
+#define POLL_INTERVAL_MS 30000           // 30s quando aguardando config
+#define COMMAND_POLL_INTERVAL_MS 5000    // 5s para verificar comandos no modo ativo
+#define SYNC_INTERVAL_HOURS 6            // Sync a cada 6h
+#define STATUS_INTERVAL_MS 300000        // Status a cada 5min
 
-// Motor
-const int DOSE_SMALL = 2048;
-const int DOSE_MEDIUM = 4096;
-const int DOSE_LARGE = 6144;
+// Motor (valores triplicados)
+const int DOSE_SMALL = 6144;     // 2048 * 3
+const int DOSE_MEDIUM = 12288;   // 4096 * 3
+const int DOSE_LARGE = 18432;    // 6144 * 3
 
 const int stepSequence[8][4] = {
   {1, 0, 0, 0}, {1, 1, 0, 0}, {0, 1, 0, 0}, {0, 1, 1, 0},
@@ -86,7 +87,8 @@ String userEmail = "";
 bool configMode = false;
 bool wifiConnected = false;
 bool waitingForSchedules = false;  // Aguardando config de horarios
-bool powerSaveEnabled = true;      // Modo economia (Deep Sleep) - controlado pelo site
+bool powerSaveEnabled = false;     // Modo economia DESATIVADO por padrao (fica acordado)
+bool activeMode = false;           // Modo ativo (polling continuo)
 int currentStep = 0;
 
 // Contadores RTC (sobrevivem ao Deep Sleep)
@@ -192,21 +194,62 @@ void dispense(int doseSize) {
 }
 
 // ==================== SENSOR ====================
+// Suporta HC-SR04 (4 pinos) e sensores de 3 pinos (S/V/G)
+// Para 3 pinos: conecte S no GPIO 25, use mesmo pino para TRIG e ECHO
+
+// Se seu sensor tem 3 pinos, descomente a linha abaixo:
+// #define SENSOR_3_PINOS
 
 float readFoodLevel() {
+  long duration = 0;
+
+#ifdef SENSOR_3_PINOS
+  // Sensor de 3 pinos: mesmo pino para TRIG e ECHO
+  pinMode(ECHO_PIN, OUTPUT);
+  digitalWrite(ECHO_PIN, LOW);
+  delayMicroseconds(2);
+  digitalWrite(ECHO_PIN, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(ECHO_PIN, LOW);
+  pinMode(ECHO_PIN, INPUT);
+  duration = pulseIn(ECHO_PIN, HIGH, 50000);
+#else
+  // HC-SR04 padrão (4 pinos)
+  // NÃO usar noInterrupts() pois conflita com WiFi do ESP32
   digitalWrite(TRIG_PIN, LOW);
   delayMicroseconds(2);
   digitalWrite(TRIG_PIN, HIGH);
   delayMicroseconds(10);
   digitalWrite(TRIG_PIN, LOW);
 
-  long duration = pulseIn(ECHO_PIN, HIGH, 30000);
-  if (duration == 0) return -1;
+  // Timeout de 50ms (max ~8.5m)
+  duration = pulseIn(ECHO_PIN, HIGH, 50000);
+#endif
 
-  float distance = duration * 0.034 / 2;
-  if (distance < 5) return 100;
-  if (distance > 20) return 0;
-  return map((long)distance, 20, 5, 0, 100);
+  // Debug do sensor
+  Serial.printf("[SENSOR] duration=%ld us", duration);
+
+  if (duration == 0) {
+    Serial.println(" -> TIMEOUT (sem resposta)");
+    Serial.println("         Verifique: VCC=5V, GND, TRIG=GPIO26, ECHO=GPIO25");
+    Serial.println("         Se sensor 3 pinos: descomente #define SENSOR_3_PINOS no codigo");
+    return -1;
+  }
+
+  float distance = duration * 0.034 / 2;  // cm
+  Serial.printf(" -> distancia=%.1f cm", distance);
+
+  float level;
+  if (distance < 5) {
+    level = 100;
+  } else if (distance > 20) {
+    level = 0;
+  } else {
+    level = map((long)distance, 20, 5, 0, 100);
+  }
+
+  Serial.printf(" -> nivel=%d%%\n", (int)level);
+  return level;
 }
 
 // ==================== CONFIGURACAO PERSISTENTE ====================
@@ -305,6 +348,14 @@ void registerDevice() {
   http.end();
 }
 
+// Retorna o modo atual do ESP32
+String getCurrentMode() {
+  if (configMode) return "config";
+  if (waitingForSchedules) return "waiting";
+  if (activeMode) return "active";
+  return "sleep";  // Vai dormir
+}
+
 void sendStatus() {
   if (!wifiConnected || deviceId.length() == 0) return;
 
@@ -317,13 +368,15 @@ void sendStatus() {
   http.addHeader("Content-Type", "application/json");
   http.setTimeout(10000);
 
-  StaticJsonDocument<256> doc;
+  StaticJsonDocument<512> doc;
   doc["food_level"] = (int)foodLevel;
   doc["rssi"] = WiFi.RSSI();
   doc["ip"] = WiFi.localIP().toString();
   doc["schedules_count"] = scheduleCount;
   doc["waiting_config"] = waitingForSchedules;
   doc["boot_count"] = bootCount;
+  doc["mode"] = getCurrentMode();
+  doc["power_save_enabled"] = powerSaveEnabled;
 
   String json;
   serializeJson(doc, json);
@@ -383,9 +436,14 @@ bool fetchSchedules() {
 
   if (httpCode == 200) {
     String payload = http.getString();
+    Serial.printf("[SYNC] Resposta: %s\n", payload.c_str());
 
     StaticJsonDocument<1024> doc;
     DeserializationError error = deserializeJson(doc, payload);
+
+    if (error) {
+      Serial.printf("[ERRO] JSON parse: %s\n", error.c_str());
+    }
 
     if (!error && doc["success"]) {
       JsonArray data = doc["data"];
@@ -394,7 +452,10 @@ bool fetchSchedules() {
       // Ler configuracao de power_save do servidor
       if (doc.containsKey("power_save")) {
         powerSaveEnabled = doc["power_save"].as<bool>();
-        Serial.printf("[CONFIG] Modo Economia: %s\n", powerSaveEnabled ? "ATIVADO" : "DESATIVADO");
+        Serial.printf("[CONFIG] power_save recebido do servidor: %s\n", powerSaveEnabled ? "true" : "false");
+        Serial.printf("[CONFIG] Modo Economia: %s\n", powerSaveEnabled ? "ATIVADO (Deep Sleep)" : "DESATIVADO (Polling ativo)");
+      } else {
+        Serial.println("[AVISO] Servidor nao enviou power_save, mantendo default: ATIVADO");
       }
 
       for (JsonObject item : data) {
@@ -444,17 +505,23 @@ bool fetchSchedules() {
 }
 
 void checkCommands() {
-  if (!wifiConnected || deviceId.length() == 0) return;
+  if (!wifiConnected || deviceId.length() == 0) {
+    Serial.println("[COMMANDS] Sem WiFi ou deviceId");
+    return;
+  }
 
   HTTPClient http;
   String url = serverUrl + "/api/devices/" + deviceId + "/commands";
+  Serial.printf("[COMMANDS] GET %s\n", url.c_str());
   http.begin(httpsClient, url);
   http.setTimeout(5000);
 
   int httpCode = http.GET();
+  Serial.printf("[COMMANDS] HTTP %d\n", httpCode);
 
   if (httpCode == 200) {
     String payload = http.getString();
+    Serial.printf("[COMMANDS] Resposta: %s\n", payload.c_str());
     StaticJsonDocument<256> doc;
 
     if (!deserializeJson(doc, payload) && doc.containsKey("command")) {
@@ -468,9 +535,14 @@ void checkCommands() {
         sendFeedingLog(doseSize);
         sendStatus();
       } else if (cmd == "sync") {
+        Serial.println("[COMANDO] Sync");
         fetchSchedules();
       }
+    } else {
+      Serial.println("[COMMANDS] Nenhum comando pendente");
     }
+  } else {
+    Serial.printf("[COMMANDS] ERRO HTTP: %d\n", httpCode);
   }
 
   http.end();
@@ -786,13 +858,14 @@ void startConfigMode() {
 }
 
 // Modo ativo: com horarios mas SEM Deep Sleep (power_save = false)
-bool activeMode = false;
 unsigned long lastScheduleCheck = 0;
 #define SCHEDULE_CHECK_INTERVAL_MS 60000  // Verificar horarios a cada 1 min
 
 void startActiveMode() {
   activeMode = true;
   waitingForSchedules = false;
+  lastPollTime = millis();  // Resetar para começar polling imediatamente
+  lastScheduleCheck = millis();
   Serial.println("\n========================================");
   Serial.println("    MODO ATIVO (SEM DEEP SLEEP)");
   Serial.println("========================================");
@@ -954,6 +1027,44 @@ void setupPins() {
   digitalWrite(LED_PIN, LOW);
 }
 
+void testMotor() {
+  Serial.println("\n[TESTE MOTOR]");
+  Serial.println("  Girando motor por 0.5 segundo...");
+  digitalWrite(LED_PIN, HIGH);
+
+  // Gira apenas 500 passos (teste rapido)
+  for (int i = 0; i < 500; i++) {
+    setStep(stepSequence[currentStep][0],
+            stepSequence[currentStep][1],
+            stepSequence[currentStep][2],
+            stepSequence[currentStep][3]);
+    currentStep = (currentStep + 1) % 8;
+    delayMicroseconds(1200);
+  }
+
+  stopMotor();
+  Serial.println("  Motor OK!\n");
+}
+
+void testSensor() {
+  Serial.println("\n[TESTE SENSOR HC-SR04]");
+  Serial.printf("  TRIG_PIN: GPIO %d\n", TRIG_PIN);
+  Serial.printf("  ECHO_PIN: GPIO %d\n", ECHO_PIN);
+  Serial.println("  Fazendo 3 leituras...");
+
+  for (int i = 0; i < 3; i++) {
+    delay(500);
+    Serial.printf("  Leitura %d: ", i + 1);
+    float level = readFoodLevel();
+    if (level < 0) {
+      Serial.println("  >>> SENSOR FALHOU - Verifique conexoes!");
+    } else {
+      Serial.printf("  >>> OK! Nivel: %.0f%%\n", level);
+    }
+  }
+  Serial.println();
+}
+
 void setup() {
   Serial.begin(115200);
   delay(500);
@@ -981,6 +1092,10 @@ void setup() {
 
     default:
       Serial.println("[BOOT] Normal");
+      Serial.println("\n========== TESTES DE HARDWARE ==========");
+      testMotor();   // Testa motor no boot
+      testSensor();  // Testa sensor no boot
+      Serial.println("=========================================\n");
       handleNormalBoot();
       return;
   }
@@ -1050,17 +1165,24 @@ void handleNormalBoot() {
   // Verifica comandos
   checkCommands();
 
+  // Log detalhado antes da decisão
+  Serial.println("\n========================================");
+  Serial.println("    DECISAO DE MODO");
+  Serial.println("========================================");
+  Serial.printf("scheduleCount: %d\n", scheduleCount);
+  Serial.printf("powerSaveEnabled: %s\n", powerSaveEnabled ? "true (Deep Sleep)" : "false (Polling)");
+
   // Decide: Deep Sleep ou polling continuo
   if (scheduleCount > 0 && powerSaveEnabled) {
-    Serial.println("\n[OK] Horarios configurados!");
+    Serial.println("\n>>> DECISAO: Deep Sleep (horarios + economia ON)");
     Serial.println("[SLEEP] Ativando modo economia (Deep Sleep)...");
     scheduleNextWakeup();
   } else if (scheduleCount > 0 && !powerSaveEnabled) {
-    Serial.println("\n[OK] Horarios configurados!");
+    Serial.println("\n>>> DECISAO: Modo Ativo (horarios + economia OFF)");
     Serial.println("[ATIVO] Modo economia DESATIVADO - polling continuo");
     startActiveMode();
   } else {
-    Serial.println("\n[AGUARDANDO] Sem horarios");
+    Serial.println("\n>>> DECISAO: Aguardando (sem horarios)");
     startWaitingMode();
   }
 }
@@ -1125,22 +1247,31 @@ void loop() {
     // LED aceso fixo indica modo ativo
     digitalWrite(LED_PIN, HIGH);
 
+    // Debug: mostrar que está no activeMode (a cada 10s)
+    static unsigned long lastDebug = 0;
+    if (millis() - lastDebug > 10000) {
+      lastDebug = millis();
+      Serial.printf("[ACTIVE] Loop ativo - millis=%lu, lastPoll=%lu, diff=%lu\n",
+                    millis(), lastPollTime, millis() - lastPollTime);
+    }
+
     // Verifica horarios a cada minuto
     if (millis() - lastScheduleCheck > SCHEDULE_CHECK_INTERVAL_MS) {
       lastScheduleCheck = millis();
       checkScheduledFeeding();
     }
 
-    // Polling de comandos e sync a cada 30s
-    if (millis() - lastPollTime > POLL_INTERVAL_MS) {
+    // Polling de comandos a cada 5s para resposta rapida
+    if (millis() - lastPollTime > COMMAND_POLL_INTERVAL_MS) {
       lastPollTime = millis();
+      Serial.println("[POLL] Verificando comandos...");
 
       checkCommands();
 
       // Sync periodico (a cada 5 min)
       static int pollCount = 0;
       pollCount++;
-      if (pollCount >= 10) {  // 10 * 30s = 5 min
+      if (pollCount >= 60) {  // 60 * 5s = 5 min
         pollCount = 0;
         fetchSchedules();
         sendStatus();

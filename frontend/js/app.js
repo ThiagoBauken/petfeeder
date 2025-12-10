@@ -858,7 +858,12 @@ function resetTimeInputs() {
 async function addSchedule() {
     const petId = parseInt(document.getElementById('schedulePetSelect').value);
     const timeRows = document.querySelectorAll('.time-input-row');
-    const globalDoseSize = document.querySelector('input[name="scheduleDose"]:checked')?.value || 'medium';
+    const globalDoseRadio = document.querySelector('input[name="scheduleDose"]:checked');
+    const globalDoseSize = globalDoseRadio?.value || 'medium';
+
+    // Debug
+    console.log('[addSchedule] Radio selecionado:', globalDoseRadio);
+    console.log('[addSchedule] Dose global:', globalDoseSize);
 
     if (!petId) {
         showToast('Selecione um pet', 'error');
@@ -874,6 +879,9 @@ async function addSchedule() {
         if (timeInput && timeInput.value) {
             const individualDose = doseSelect?.value || '';
             const effectiveDoseSize = individualDose || globalDoseSize;
+
+            console.log(`[addSchedule] Horário ${timeInput.value}: individual="${individualDose}", efetiva="${effectiveDoseSize}", gramas=${DOSE_CONFIG[effectiveDoseSize].grams}`);
+
             scheduleItems.push({
                 time: timeInput.value,
                 doseSize: effectiveDoseSize,

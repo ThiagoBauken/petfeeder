@@ -79,6 +79,9 @@ db.serialize(() => {
     // Ignora erro se coluna já existe
   });
 
+  // Garantir que dispositivos existentes tenham power_save = 0 (não NULL)
+  db.run(`UPDATE devices SET power_save = 0 WHERE power_save IS NULL`);
+
   // Pets
   db.run(`
     CREATE TABLE IF NOT EXISTS pets (
@@ -895,10 +898,12 @@ app.get('/api/feed/history', authMiddleware, (req, res) => {
       if (err) {
         return res.status(500).json({ success: false, message: 'Erro ao buscar histórico' });
       }
-      // Adicionar status success para cada item
+      // Adicionar status success e formatar timestamp como UTC
       const formattedHistory = (history || []).map(h => ({
         ...h,
-        status: 'success'
+        status: 'success',
+        // Adicionar 'Z' para indicar UTC (SQLite não inclui timezone)
+        timestamp: h.timestamp ? h.timestamp.replace(' ', 'T') + 'Z' : null
       }));
       res.json({ success: true, data: formattedHistory });
     }
@@ -925,7 +930,12 @@ app.get('/api/feedings', authMiddleware, (req, res) => {
       if (err) {
         return res.status(500).json({ success: false, message: 'Erro ao buscar histórico' });
       }
-      res.json({ success: true, data: history || [] });
+      // Formatar timestamp como UTC
+      const formattedHistory = (history || []).map(h => ({
+        ...h,
+        timestamp: h.timestamp ? h.timestamp.replace(' ', 'T') + 'Z' : null
+      }));
+      res.json({ success: true, data: formattedHistory });
     }
   );
 });
@@ -1172,10 +1182,21 @@ app.get('/api/devices/:deviceId/commands', (req, res) => {
 // ESP32 envia status
 app.post('/api/devices/:deviceId/status', (req, res) => {
   const deviceId = req.params.deviceId;
-  const { online, food_level, distance_cm, rssi, ip } = req.body;
+  const { online, food_level, distance_cm, rssi, ip, mode, power_save_enabled, schedules_count } = req.body;
   const now = new Date().toISOString();
 
-  console.log(`📊 Status de ${deviceId}: Nível=${food_level}%, Dist=${distance_cm}cm, IP=${ip}`);
+  const modeNames = {
+    'config': '🔧 Configuração',
+    'waiting': '⏳ Aguardando horários',
+    'active': '✅ Ativo (recebe comandos)',
+    'sleep': '😴 Deep Sleep'
+  };
+
+  console.log(`📊 Status de ${deviceId}:`);
+  console.log(`   Nível: ${food_level}%`);
+  console.log(`   Modo: ${modeNames[mode] || mode}`);
+  console.log(`   Economia: ${power_save_enabled ? 'ON' : 'OFF'}`);
+  console.log(`   IP: ${ip}`);
 
   // Atualizar status em memória
   deviceStatus.set(deviceId, {
@@ -1184,6 +1205,9 @@ app.post('/api/devices/:deviceId/status', (req, res) => {
     distance_cm,
     rssi,
     ip,
+    mode,
+    power_save_enabled,
+    schedules_count,
     lastSeen: now
   });
 
@@ -1204,7 +1228,16 @@ app.post('/api/devices/:deviceId/status', (req, res) => {
     if (device) {
       sendToUser(device.user_id, {
         type: 'device_status',
-        data: { device_id: deviceId, food_level, distance_cm, online: true, last_seen: now }
+        data: {
+          device_id: deviceId,
+          food_level,
+          distance_cm,
+          online: true,
+          last_seen: now,
+          mode,
+          power_save_enabled,
+          schedules_count
+        }
       });
     }
   });
@@ -1346,11 +1379,14 @@ app.get('/api/devices/:deviceId/schedules', (req, res) => {
           };
         });
 
-        console.log(`   Enviando ${formatted.length} horários (power_save: ${device.power_save ? 'ON' : 'OFF'})`);
+        const powerSaveValue = device.power_save === 1;
+        console.log(`   Enviando ${formatted.length} horários`);
+        console.log(`   power_save no DB: ${device.power_save} (tipo: ${typeof device.power_save})`);
+        console.log(`   power_save enviado: ${powerSaveValue}`);
         res.json({
           success: true,
           data: formatted,
-          power_save: device.power_save === 1
+          power_save: powerSaveValue
         });
       }
     );
