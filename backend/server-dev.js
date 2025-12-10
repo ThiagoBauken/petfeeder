@@ -551,16 +551,16 @@ app.post('/api/devices/auto-register', (req, res) => {
     const deviceName = name || `PetFeeder ${deviceId.slice(-6)}`;
 
     // Verifica se já existe
-    db.get('SELECT id FROM devices WHERE device_id = ?', [deviceId], (err, existing) => {
+    db.get('SELECT id, name FROM devices WHERE device_id = ?', [deviceId], (err, existing) => {
       if (existing) {
         // Atualiza o user_id se o dispositivo já existe
-        db.run('UPDATE devices SET user_id = ?, name = ?, status = ? WHERE device_id = ?',
-          [user.id, deviceName, 'online', deviceId],
+        db.run('UPDATE devices SET user_id = ?, status = ? WHERE device_id = ?',
+          [user.id, 'online', deviceId],
           (err) => {
             if (err) {
               return res.status(500).json({ success: false, message: 'Erro ao atualizar dispositivo' });
             }
-            console.log(`Dispositivo ${deviceId} re-vinculado ao usuário ${email}`);
+            console.log(`Dispositivo ${deviceId} re-vinculado ao usuário ${email} (nome mantido: ${existing.name})`);
             res.json({ success: true, message: 'Dispositivo atualizado' });
           }
         );

@@ -230,8 +230,8 @@ class APIClient {
 
   async feedNow(deviceId, petId, amount) {
     return this.request('POST', '/feed/now', {
-      device_id: deviceId,
-      pet_id: petId,
+      deviceId: deviceId,
+      petId: petId,
       amount,
     });
   }
