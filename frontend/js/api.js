@@ -248,19 +248,19 @@ class APIClient {
 
   async getSchedules(params = {}) {
     const queryString = new URLSearchParams(params).toString();
-    return this.request('GET', `/feed/schedules?${queryString}`);
+    return this.request('GET', `/schedules?${queryString}`);
   }
 
   async createSchedule(data) {
-    return this.request('POST', '/feed/schedules', data);
+    return this.request('POST', '/schedules', data);
   }
 
   async updateSchedule(id, data) {
-    return this.request('PUT', `/feed/schedules/${id}`, data);
+    return this.request('PUT', `/schedules/${id}`, data);
   }
 
   async deleteSchedule(id) {
-    return this.request('DELETE', `/feed/schedules/${id}`);
+    return this.request('DELETE', `/schedules/${id}`);
   }
 }
 

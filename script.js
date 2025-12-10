@@ -1,6 +1,7 @@
 // =============== GLOBAL VARIABLES ===============
 let ws = null;
 let reconnectInterval = null;
+let devices = []; // Lista de dispositivos ESP32
 let systemData = {
     pets: [],
     schedules: [],
@@ -965,9 +966,6 @@ const PORTION_SIZES = {
     large: 50
 };
 
-// Device management data
-let devices = [];
-
 // Initialize portion size handlers
 function initPortionHandlers() {
     ['pet1', 'pet2', 'pet3'].forEach(petId => {
@@ -1265,7 +1263,7 @@ function calibrateDevice(deviceId) {
 // Test device
 function testDevice(deviceId) {
     const motor = prompt('Qual motor testar? (1, 2 ou 3):');
-    if (!motor || ![' 1', '2', '3'].includes(motor)) return;
+    if (!motor || !['1', '2', '3'].includes(motor)) return;
 
     sendWebSocketMessage({
         action: 'test',

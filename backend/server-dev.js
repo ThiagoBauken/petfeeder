@@ -1027,6 +1027,17 @@ app.post('/api/schedules', authMiddleware, (req, res) => {
               }
 
               console.log(`[SCHEDULES] Criado: ${hour}:${minute} para pet ${petId}`);
+
+              // Enviar comando sync para o ESP32
+              db.get('SELECT device_id FROM devices WHERE id = ?', [deviceId], (errDev, device) => {
+                if (device && device.device_id) {
+                  const commands = deviceCommands.get(device.device_id) || [];
+                  commands.push({ command: 'sync' });
+                  deviceCommands.set(device.device_id, commands);
+                  console.log(`📤 Comando SYNC enfileirado para ${device.device_id} (novo horário ${hour}:${minute})`);
+                }
+              });
+
               res.json({
                 success: true,
                 data: {
@@ -1086,6 +1097,17 @@ app.put('/api/schedules/:id', authMiddleware, (req, res) => {
           if (err) {
             return res.status(500).json({ success: false, message: 'Erro ao atualizar horário' });
           }
+
+          // Enviar comando sync para o ESP32
+          db.get('SELECT device_id FROM devices WHERE id = ?', [schedule.device_id], (_, device) => {
+            if (device && device.device_id) {
+              const commands = deviceCommands.get(device.device_id) || [];
+              commands.push({ command: 'sync' });
+              deviceCommands.set(device.device_id, commands);
+              console.log(`📤 Comando SYNC enfileirado para ${device.device_id} (horário atualizado)`);
+            }
+          });
+
           res.json({ success: true, message: 'Horário atualizado' });
         }
       );
@@ -1108,10 +1130,23 @@ app.delete('/api/schedules/:id', authMiddleware, (req, res) => {
         return res.status(404).json({ error: 'Horário não encontrado' });
       }
 
+      // Guardar device_id antes de deletar
+      const scheduleDeviceId = schedule.device_id;
+
       db.run('DELETE FROM schedules WHERE id = ?', [scheduleId], (err) => {
         if (err) {
           return res.status(500).json({ error: 'Erro ao deletar horário' });
         }
+
+        // Enviar comando sync para o ESP32
+        db.get('SELECT device_id FROM devices WHERE id = ?', [scheduleDeviceId], (_, device) => {
+          if (device && device.device_id) {
+            const commands = deviceCommands.get(device.device_id) || [];
+            commands.push({ command: 'sync' });
+            deviceCommands.set(device.device_id, commands);
+            console.log(`📤 Comando SYNC enfileirado para ${device.device_id} (horário deletado)`);
+          }
+        });
 
         res.json({ success: true, message: 'Horário deletado' });
       });
@@ -1434,11 +1469,13 @@ app.get('/api/devices/:deviceId/schedules', (req, res) => {
     }
 
     // Buscar horários do usuário dono do dispositivo
+    // IMPORTANTE: ORDER BY garante ordem consistente para o bitmask executedToday do ESP32
     db.all(
       `SELECT s.hour, s.minute, s.amount, s.days, s.active, p.name as pet_name
        FROM schedules s
        JOIN pets p ON s.pet_id = p.id
-       WHERE p.user_id = ? AND s.active = 1`,
+       WHERE p.user_id = ? AND s.active = 1
+       ORDER BY s.hour, s.minute`,
       [device.user_id],
       (err, schedules) => {
         if (err) {
@@ -1489,9 +1526,11 @@ app.get('/api/devices/:deviceId/schedules', (req, res) => {
         });
 
         const powerSaveValue = device.power_save === 1;
-        console.log(`   Enviando ${formatted.length} horários`);
-        console.log(`   power_save no DB: ${device.power_save} (tipo: ${typeof device.power_save})`);
-        console.log(`   power_save enviado: ${powerSaveValue}`);
+        console.log(`   Enviando ${formatted.length} horários (ordenados por hora:minuto):`);
+        formatted.forEach((s, i) => {
+          console.log(`     [${i}] ${String(s.hour).padStart(2,'0')}:${String(s.minute).padStart(2,'0')} ${s.pet} ${s.size}`);
+        });
+        console.log(`   power_save: ${powerSaveValue}`);
         res.json({
           success: true,
           data: formatted,

@@ -708,6 +708,8 @@ void checkCommands() {
       } else if (cmd == "sync") {
         Serial.println("[COMANDO] Sync");
         fetchSchedules();
+        // Verifica horários imediatamente após sync (caso algum esteja pendente)
+        checkScheduledFeeding();
       } else if (cmd == "check_level") {
         Serial.println("[COMANDO] Verificar nivel de racao");
         sendStatus();  // Le o sensor e envia pro servidor
