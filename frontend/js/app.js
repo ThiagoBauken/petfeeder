@@ -487,7 +487,14 @@ function renderSchedulesList() {
         return;
     }
 
-    container.innerHTML = state.schedules.map(schedule => {
+    // Ordena por horário (hora * 60 + minuto)
+    const sortedSchedules = [...state.schedules].sort((a, b) => {
+        const timeA = parseInt(a.hour) * 60 + parseInt(a.minute);
+        const timeB = parseInt(b.hour) * 60 + parseInt(b.minute);
+        return timeA - timeB;
+    });
+
+    container.innerHTML = sortedSchedules.map(schedule => {
         const weekdays = [];
         if (schedule.monday) weekdays.push('Seg');
         if (schedule.tuesday) weekdays.push('Ter');
@@ -517,10 +524,13 @@ function renderSchedulesList() {
                         </p>
                     </div>
                     <div style="display: flex; gap: 10px;">
-                        <button class="btn btn-sm btn-secondary" onclick="toggleSchedule(${schedule.id}, ${!schedule.active})">
+                        <button class="btn btn-sm btn-primary" onclick="editSchedule(${schedule.id})" title="Editar">
+                            <i class="fas fa-edit"></i>
+                        </button>
+                        <button class="btn btn-sm btn-secondary" onclick="toggleSchedule(${schedule.id}, ${!schedule.active})" title="${schedule.active ? 'Pausar' : 'Ativar'}">
                             <i class="fas fa-${schedule.active ? 'pause' : 'play'}"></i>
                         </button>
-                        <button class="btn btn-sm btn-danger" onclick="deleteSchedule(${schedule.id})">
+                        <button class="btn btn-sm btn-danger" onclick="deleteSchedule(${schedule.id})" title="Excluir">
                             <i class="fas fa-trash"></i>
                         </button>
                     </div>
@@ -543,7 +553,21 @@ function renderHistoryList() {
     }
 
     container.innerHTML = state.history.map(item => {
-        const date = new Date(item.timestamp);
+        // Trata timestamp - pode vir em diferentes formatos
+        let dateStr = 'Data desconhecida';
+        if (item.timestamp) {
+            const date = new Date(item.timestamp);
+            if (!isNaN(date.getTime())) {
+                dateStr = `${date.toLocaleDateString('pt-BR')} às ${date.toLocaleTimeString('pt-BR')}`;
+            } else {
+                // Tenta parsear formato SQLite (YYYY-MM-DD HH:MM:SS)
+                const parts = item.timestamp.match(/(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2}):(\d{2})/);
+                if (parts) {
+                    const d = new Date(parts[1], parts[2]-1, parts[3], parts[4], parts[5], parts[6]);
+                    dateStr = `${d.toLocaleDateString('pt-BR')} às ${d.toLocaleTimeString('pt-BR')}`;
+                }
+            }
+        }
         const statusIcon = item.status === 'success' ? 'check-circle' : 'exclamation-circle';
         const statusColor = item.status === 'success' ? '#48bb78' : '#f56565';
 
@@ -556,7 +580,7 @@ function renderHistoryList() {
                             ${item.pet_name || 'Pet não identificado'}
                         </h4>
                         <p style="margin: 5px 0; color: #666;">
-                            ${date.toLocaleDateString('pt-BR')} às ${date.toLocaleTimeString('pt-BR')}
+                            ${dateStr}
                         </p>
                         <p style="margin: 5px 0; color: #666;">
                             ${item.amount}g • ${getTriggerLabel(item.trigger)}
@@ -1025,6 +1049,81 @@ async function deleteSchedule(scheduleId) {
     } catch (error) {
         console.error('Delete schedule error:', error);
         showToast(error.message || 'Erro ao remover horário', 'error');
+    }
+}
+
+function editSchedule(scheduleId) {
+    const schedule = state.schedules.find(s => s.id === scheduleId);
+    if (!schedule) {
+        showToast('Horário não encontrado', 'error');
+        return;
+    }
+
+    // Preenche o formulário
+    document.getElementById('editScheduleId').value = scheduleId;
+    document.getElementById('editSchedulePetName').value = schedule.pet_name || 'Pet';
+    document.getElementById('editScheduleTime').value =
+        `${String(schedule.hour).padStart(2, '0')}:${String(schedule.minute).padStart(2, '0')}`;
+
+    // Seleciona a dose
+    const doseSize = getDoseSizeFromAmount(schedule.amount);
+    document.querySelectorAll('input[name="editScheduleDose"]').forEach(radio => {
+        radio.checked = (radio.value === doseSize);
+    });
+
+    // Preenche os dias
+    document.getElementById('edit_day_mon').checked = schedule.monday;
+    document.getElementById('edit_day_tue').checked = schedule.tuesday;
+    document.getElementById('edit_day_wed').checked = schedule.wednesday;
+    document.getElementById('edit_day_thu').checked = schedule.thursday;
+    document.getElementById('edit_day_fri').checked = schedule.friday;
+    document.getElementById('edit_day_sat').checked = schedule.saturday;
+    document.getElementById('edit_day_sun').checked = schedule.sunday;
+
+    // Mostra o modal
+    closeAllModals();
+    document.getElementById('editScheduleModal').classList.add('active');
+}
+
+async function saveScheduleEdit() {
+    const scheduleId = document.getElementById('editScheduleId').value;
+    const timeInput = document.getElementById('editScheduleTime').value;
+    const doseRadio = document.querySelector('input[name="editScheduleDose"]:checked');
+
+    if (!timeInput) {
+        showToast('Selecione um horário', 'error');
+        return;
+    }
+
+    const [hour, minute] = timeInput.split(':').map(Number);
+    const dose = doseRadio ? doseRadio.value : 'medium';
+    const amounts = { small: 50, medium: 100, large: 150 };
+
+    const updateData = {
+        hour,
+        minute,
+        amount: amounts[dose],
+        monday: document.getElementById('edit_day_mon').checked,
+        tuesday: document.getElementById('edit_day_tue').checked,
+        wednesday: document.getElementById('edit_day_wed').checked,
+        thursday: document.getElementById('edit_day_thu').checked,
+        friday: document.getElementById('edit_day_fri').checked,
+        saturday: document.getElementById('edit_day_sat').checked,
+        sunday: document.getElementById('edit_day_sun').checked,
+    };
+
+    try {
+        const result = await api.updateSchedule(scheduleId, updateData);
+        if (result.success) {
+            showToast('Horário atualizado!', 'success');
+            closeAllModals();
+            await loadSchedules();
+        } else {
+            showToast(result.message || 'Erro ao atualizar horário', 'error');
+        }
+    } catch (error) {
+        console.error('Update schedule error:', error);
+        showToast(error.message || 'Erro ao atualizar horário', 'error');
     }
 }
 

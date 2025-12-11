@@ -459,6 +459,73 @@
         </div>
     </div>
 
+    <!-- Edit Schedule Modal -->
+    <div id="editScheduleModal" class="modal">
+        <div class="modal-header">
+            <h3><i class="fas fa-edit"></i> Editar Horário</h3>
+            <button class="modal-close" onclick="closeAllModals()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <input type="hidden" id="editScheduleId">
+
+            <div class="form-group">
+                <label>Pet:</label>
+                <input type="text" id="editSchedulePetName" disabled style="background: #f0f0f0;">
+            </div>
+
+            <div class="form-group">
+                <label><i class="fas fa-clock"></i> Horário:</label>
+                <input type="time" id="editScheduleTime" required>
+            </div>
+
+            <div class="form-group">
+                <label>Dose:</label>
+                <div class="dose-selector">
+                    <label class="dose-option">
+                        <input type="radio" name="editScheduleDose" value="small">
+                        <div class="dose-card">
+                            <span class="dose-name">Pequena</span>
+                            <span class="dose-amount">~50g</span>
+                        </div>
+                    </label>
+                    <label class="dose-option">
+                        <input type="radio" name="editScheduleDose" value="medium">
+                        <div class="dose-card">
+                            <span class="dose-name">Média</span>
+                            <span class="dose-amount">~100g</span>
+                        </div>
+                    </label>
+                    <label class="dose-option">
+                        <input type="radio" name="editScheduleDose" value="large">
+                        <div class="dose-card">
+                            <span class="dose-name">Grande</span>
+                            <span class="dose-amount">~150g</span>
+                        </div>
+                    </label>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label>Dias da Semana:</label>
+                <div class="weekday-selector">
+                    <label class="day-btn"><input type="checkbox" id="edit_day_mon"><span>Seg</span></label>
+                    <label class="day-btn"><input type="checkbox" id="edit_day_tue"><span>Ter</span></label>
+                    <label class="day-btn"><input type="checkbox" id="edit_day_wed"><span>Qua</span></label>
+                    <label class="day-btn"><input type="checkbox" id="edit_day_thu"><span>Qui</span></label>
+                    <label class="day-btn"><input type="checkbox" id="edit_day_fri"><span>Sex</span></label>
+                    <label class="day-btn"><input type="checkbox" id="edit_day_sat"><span>Sáb</span></label>
+                    <label class="day-btn"><input type="checkbox" id="edit_day_sun"><span>Dom</span></label>
+                </div>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeAllModals()">Cancelar</button>
+            <button class="btn btn-primary" onclick="saveScheduleEdit()">
+                <i class="fas fa-save"></i> Salvar
+            </button>
+        </div>
+    </div>
+
     <!-- Link Device Modal -->
     <div id="linkDeviceModal" class="modal">
         <div class="modal-header">

@@ -96,10 +96,10 @@ RTC_DATA_ATTR int bootCount = 0;
 RTC_DATA_ATTR bool deviceRegistered = false;
 RTC_DATA_ATTR int lastExecutionDay = -1;        // Dia do mês da última execução
 
-// Array para rastrear horários executados hoje (até 16 slots)
+// Array para rastrear horários executados hoje (até 40 slots)
 // Formato: hora*60 + minuto (ex: 00:09 = 9, 14:30 = 870)
 // Usar valor 0xFFFF para indicar slot vazio
-RTC_DATA_ATTR uint16_t executedTimes[16];       // Horários já executados hoje (minutos desde meia-noite)
+RTC_DATA_ATTR uint16_t executedTimes[40];       // Horários já executados hoje (minutos desde meia-noite)
 RTC_DATA_ATTR uint8_t executedCount = 0;        // Quantos foram executados hoje
 
 // Tempo offline (sobrevive ao Deep Sleep)
@@ -135,7 +135,7 @@ struct Schedule {
   uint8_t days;  // Bitmask: bit0=Dom, bit1=Seg, ..., bit6=Sab
   char petName[32];  // Nome do pet
 };
-Schedule schedules[10];
+Schedule schedules[40];  // Aumentado de 10 para 40 horarios
 int scheduleCount = 0;
 
 unsigned long lastPollTime = 0;
@@ -439,7 +439,7 @@ void loadConfig() {
   powerSaveEnabled = preferences.getBool("powerSave", false);  // Carrega config de economia
 
   // Carrega horarios da flash
-  for (int i = 0; i < scheduleCount && i < 10; i++) {
+  for (int i = 0; i < scheduleCount && i < 40; i++) {
     String key = "s" + String(i);
     schedules[i].hour = preferences.getInt((key + "h").c_str(), 0);
     schedules[i].minute = preferences.getInt((key + "m").c_str(), 0);
@@ -479,7 +479,7 @@ void saveConfig(String ssid, String password, String email) {
 void saveSchedulesToFlash() {
   preferences.putInt("schedCount", scheduleCount);
   preferences.putBool("powerSave", powerSaveEnabled);  // Salva config de economia
-  for (int i = 0; i < scheduleCount && i < 10; i++) {
+  for (int i = 0; i < scheduleCount && i < 40; i++) {
     String key = "s" + String(i);
     preferences.putInt((key + "h").c_str(), schedules[i].hour);
     preferences.putInt((key + "m").c_str(), schedules[i].minute);
@@ -822,7 +822,7 @@ bool fetchSchedules() {
     String payload = http.getString();
     Serial.printf("[SYNC] Resposta: %s\n", payload.c_str());
 
-    StaticJsonDocument<1024> doc;
+    StaticJsonDocument<4096> doc;  // Aumentado para suportar ate 40 horarios
     DeserializationError error = deserializeJson(doc, payload);
 
     if (error) {
@@ -843,7 +843,7 @@ bool fetchSchedules() {
       }
 
       for (JsonObject item : data) {
-        if (scheduleCount >= 10) break;
+        if (scheduleCount >= 40) break;
 
         schedules[scheduleCount].hour = item["hour"];
         schedules[scheduleCount].minute = item["minute"];
@@ -1063,7 +1063,7 @@ bool estimateOfflineTime(struct tm* timeinfo) {
 // Verifica se um horário já foi executado hoje (por hora:minuto, não por índice)
 bool wasTimeExecutedToday(int hour, int minute) {
   uint16_t timeKey = hour * 60 + minute;
-  for (int i = 0; i < executedCount && i < 16; i++) {
+  for (int i = 0; i < executedCount && i < 40; i++) {
     if (executedTimes[i] == timeKey) {
       return true;
     }
@@ -1086,7 +1086,7 @@ void markTimeAsExecuted(int hour, int minute) {
 // Reseta as execuções para novo dia
 void resetDailyExecutions(int dayOfMonth) {
   Serial.printf("[HORARIOS] Novo dia (%d), resetando execucoes\n", dayOfMonth);
-  for (int i = 0; i < 16; i++) {
+  for (int i = 0; i < 40; i++) {
     executedTimes[i] = 0xFFFF;  // Marca como vazio
   }
   executedCount = 0;
@@ -1123,7 +1123,7 @@ void checkScheduledFeeding() {
                 usingEstimatedTime ? " [OFFLINE]" : "");
   Serial.printf("[HORARIOS] Execucoes hoje: %d\n", executedCount);
 
-  for (int i = 0; i < scheduleCount && i < 10; i++) {
+  for (int i = 0; i < scheduleCount && i < 40; i++) {
     if (!schedules[i].active) {
       Serial.printf("  [%d] %02d:%02d %s -> INATIVO\n", i, schedules[i].hour, schedules[i].minute, schedules[i].petName);
       continue;
@@ -1324,7 +1324,7 @@ void handleScan() {
   Serial.println("[SCAN] Buscando redes...");
   int n = WiFi.scanNetworks();
   String json = "{\"networks\":[";
-  for (int i = 0; i < n && i < 10; i++) {
+  for (int i = 0; i < n && i < 40; i++) {
     if (i > 0) json += ",";
     json += "{\"ssid\":\"" + WiFi.SSID(i) + "\",\"rssi\":" + String(WiFi.RSSI(i)) + "}";
   }
@@ -1428,7 +1428,7 @@ void startActiveMode() {
   }
 
   Serial.printf("HORARIOS CARREGADOS: %d\n", scheduleCount);
-  for (int i = 0; i < scheduleCount && i < 10; i++) {
+  for (int i = 0; i < scheduleCount && i < 40; i++) {
     Serial.printf("  [%d] %02d:%02d %s dose=%d dias=0x%02X ativo=%d\n",
       i + 1,
       schedules[i].hour,
@@ -1574,7 +1574,7 @@ void checkResetButton() {
         Serial.println("[RESET] Limpando configuracoes...");
         clearConfig();
 
-        for (int i = 0; i < 10; i++) {
+        for (int i = 0; i < 40; i++) {
           digitalWrite(LED_PIN, !digitalRead(LED_PIN));
           delay(100);
         }
