@@ -494,7 +494,22 @@ function renderSchedulesList() {
         return timeA - timeB;
     });
 
-    container.innerHTML = sortedSchedules.map(schedule => {
+    // Barra de ações em massa
+    const massActionsBar = `
+        <div class="card" style="background: #f8f9fa; margin-bottom: 15px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
+                <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; margin: 0;">
+                    <input type="checkbox" id="selectAllSchedules" onchange="toggleSelectAllSchedules(this.checked)">
+                    <span>Selecionar todos (${sortedSchedules.length})</span>
+                </label>
+                <button class="btn btn-sm btn-danger" onclick="deleteSelectedSchedules()" id="deleteSelectedBtn" disabled>
+                    <i class="fas fa-trash"></i> Apagar selecionados (<span id="selectedCount">0</span>)
+                </button>
+            </div>
+        </div>
+    `;
+
+    const scheduleCards = sortedSchedules.map(schedule => {
         const weekdays = [];
         if (schedule.monday) weekdays.push('Seg');
         if (schedule.tuesday) weekdays.push('Ter');
@@ -512,16 +527,19 @@ function renderSchedulesList() {
         return `
             <div class="card">
                 <div style="display: flex; justify-content: space-between; align-items: center;">
-                    <div>
-                        <h3 style="margin: 0;">
-                            ${String(schedule.hour).padStart(2, '0')}:${String(schedule.minute).padStart(2, '0')}
-                            <span class="badge badge-${schedule.active ? 'success' : 'secondary'}">
-                                ${schedule.active ? 'Ativo' : 'Inativo'}
-                            </span>
-                        </h3>
-                        <p style="margin: 5px 0; color: #666;">
-                            ${schedule.pet_name} • ${doseIcon} ${doseLabel} (${schedule.amount}g) • ${weekdays.join(', ')}
-                        </p>
+                    <div style="display: flex; align-items: center; gap: 12px;">
+                        <input type="checkbox" class="schedule-checkbox" data-id="${schedule.id}" onchange="updateSelectedCount()">
+                        <div>
+                            <h3 style="margin: 0;">
+                                ${String(schedule.hour).padStart(2, '0')}:${String(schedule.minute).padStart(2, '0')}
+                                <span class="badge badge-${schedule.active ? 'success' : 'secondary'}">
+                                    ${schedule.active ? 'Ativo' : 'Inativo'}
+                                </span>
+                            </h3>
+                            <p style="margin: 5px 0; color: #666;">
+                                ${schedule.pet_name} • ${doseIcon} ${doseLabel} (${schedule.amount}g) • ${weekdays.join(', ')}
+                            </p>
+                        </div>
                     </div>
                     <div style="display: flex; gap: 10px;">
                         <button class="btn btn-sm btn-primary" onclick="editSchedule(${schedule.id})" title="Editar">
@@ -538,6 +556,62 @@ function renderSchedulesList() {
             </div>
         `;
     }).join('');
+
+    container.innerHTML = massActionsBar + scheduleCards;
+}
+
+// Selecionar/desselecionar todos os horários
+function toggleSelectAllSchedules(checked) {
+    const checkboxes = document.querySelectorAll('.schedule-checkbox');
+    checkboxes.forEach(cb => cb.checked = checked);
+    updateSelectedCount();
+}
+
+// Atualizar contador de selecionados
+function updateSelectedCount() {
+    const checkboxes = document.querySelectorAll('.schedule-checkbox:checked');
+    const count = checkboxes.length;
+    const countSpan = document.getElementById('selectedCount');
+    const deleteBtn = document.getElementById('deleteSelectedBtn');
+    const selectAllCheckbox = document.getElementById('selectAllSchedules');
+    const totalCheckboxes = document.querySelectorAll('.schedule-checkbox').length;
+
+    if (countSpan) countSpan.textContent = count;
+    if (deleteBtn) deleteBtn.disabled = count === 0;
+    if (selectAllCheckbox) selectAllCheckbox.checked = count === totalCheckboxes && totalCheckboxes > 0;
+}
+
+// Apagar horários selecionados
+async function deleteSelectedSchedules() {
+    const checkboxes = document.querySelectorAll('.schedule-checkbox:checked');
+    const ids = Array.from(checkboxes).map(cb => cb.dataset.id);
+
+    if (ids.length === 0) return;
+
+    if (!confirm(`Tem certeza que deseja apagar ${ids.length} horário(s)?`)) return;
+
+    showToast(`Apagando ${ids.length} horários...`, 'info');
+
+    let deleted = 0;
+    let errors = 0;
+
+    for (const id of ids) {
+        try {
+            await api.deleteSchedule(id);
+            deleted++;
+        } catch (error) {
+            console.error(`Erro ao apagar horário ${id}:`, error);
+            errors++;
+        }
+    }
+
+    if (errors > 0) {
+        showToast(`${deleted} apagados, ${errors} erros`, 'warning');
+    } else {
+        showToast(`${deleted} horários apagados!`, 'success');
+    }
+
+    await loadSchedules();
 }
 
 function renderHistoryList() {
