@@ -1356,7 +1356,13 @@ app.post('/api/feed/log', (req, res) => {
       console.log(`✅ Pet encontrado: ${pet.name} (id: ${pet.id})`);
 
       // Registrar no histórico (usa timestamp offline se fornecido)
-      const triggerType = isOffline ? 'scheduled_offline' : (trigger || 'remote');
+      // Se offline: scheduled vira scheduled_offline, outros triggers mantém o valor original
+      let triggerType;
+      if (isOffline) {
+        triggerType = (trigger === 'scheduled') ? 'scheduled_offline' : (trigger || 'scheduled_offline');
+      } else {
+        triggerType = trigger || 'remote';
+      }
       db.run(
         'INSERT INTO feeding_history (pet_id, device_id, amount, trigger_type, created_at) VALUES (?, ?, ?, ?, ?)',
         [pet.id, device.id, amount, triggerType, timestamp],

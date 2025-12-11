@@ -121,6 +121,7 @@ struct PendingFeed {
   time_t timestamp;      // Quando foi executada (epoch)
   uint8_t doseSize;      // 1=small, 2=medium, 3=large
   char petName[32];      // Nome do pet
+  char trigger[16];      // Tipo de trigger (scheduled, button, etc)
   bool valid;            // Se este slot está em uso
 };
 PendingFeed pendingFeeds[MAX_PENDING_FEEDS];
@@ -170,7 +171,7 @@ void clearConfig();
 bool connectWiFi();
 void savePendingFeedsToFlash();
 void loadPendingFeedsFromFlash();
-void addPendingFeed(int doseSize, const char* petName);
+void addPendingFeed(int doseSize, const char* petName, const char* trigger = "scheduled");
 void sendPendingFeeds();
 void saveTimeToFlash();
 void loadTimeFromFlash();
@@ -547,6 +548,7 @@ void savePendingFeedsToFlash() {
     preferences.putULong64((key + "t").c_str(), (uint64_t)pendingFeeds[i].timestamp);
     preferences.putUChar((key + "d").c_str(), pendingFeeds[i].doseSize);
     preferences.putString((key + "p").c_str(), pendingFeeds[i].petName);
+    preferences.putString((key + "r").c_str(), pendingFeeds[i].trigger);  // r = trigger type
   }
   Serial.printf("[OFFLINE] %d alimentacoes pendentes salvas na flash\n", pendingFeedCount);
 }
@@ -562,6 +564,9 @@ void loadPendingFeedsFromFlash() {
     String pet = preferences.getString((key + "p").c_str(), "Pet");
     strncpy(pendingFeeds[i].petName, pet.c_str(), 31);
     pendingFeeds[i].petName[31] = '\0';
+    String trig = preferences.getString((key + "r").c_str(), "scheduled");  // r = trigger type
+    strncpy(pendingFeeds[i].trigger, trig.c_str(), 15);
+    pendingFeeds[i].trigger[15] = '\0';
     pendingFeeds[i].valid = true;
   }
 
@@ -570,7 +575,7 @@ void loadPendingFeedsFromFlash() {
   }
 }
 
-void addPendingFeed(int doseSize, const char* petName) {
+void addPendingFeed(int doseSize, const char* petName, const char* trigger) {
   if (pendingFeedCount >= MAX_PENDING_FEEDS) {
     Serial.println("[OFFLINE] Fila cheia! Removendo mais antiga...");
     // Shift array para remover a mais antiga
@@ -599,13 +604,16 @@ void addPendingFeed(int doseSize, const char* petName) {
     strcpy(pendingFeeds[pendingFeedCount].petName, "Pet");
   }
   pendingFeeds[pendingFeedCount].petName[31] = '\0';
+  // Salva o tipo de trigger
+  strncpy(pendingFeeds[pendingFeedCount].trigger, trigger, 15);
+  pendingFeeds[pendingFeedCount].trigger[15] = '\0';
   pendingFeeds[pendingFeedCount].valid = true;
   pendingFeedCount++;
 
   // Salva imediatamente na flash
   savePendingFeedsToFlash();
 
-  Serial.printf("[OFFLINE] Alimentacao adicionada a fila (%d pendentes)\n", pendingFeedCount);
+  Serial.printf("[OFFLINE] Alimentacao adicionada a fila (%d pendentes, trigger=%s)\n", pendingFeedCount, trigger);
 }
 
 void sendPendingFeeds() {
@@ -634,7 +642,7 @@ void sendPendingFeeds() {
     StaticJsonDocument<512> doc;
     doc["device_id"] = deviceId;
     doc["size"] = size;
-    doc["trigger"] = "scheduled";
+    doc["trigger"] = pendingFeeds[i].trigger;  // Usa o trigger armazenado
     doc["offline"] = true;  // Marca como alimentacao offline
     doc["executed_at"] = timeStr;  // Quando foi executada
     if (strlen(pendingFeeds[i].petName) > 0) {
@@ -762,7 +770,7 @@ void sendFeedingLog(int doseSize, const char* petName, const char* trigger) {
   // Se offline, adiciona a fila para enviar depois
   if (!wifiConnected || deviceId.length() == 0) {
     Serial.println("[LOG] Offline - adicionando a fila de pendentes");
-    addPendingFeed(doseSize, petName);
+    addPendingFeed(doseSize, petName, trigger);  // Passa o trigger para a fila
     return;
   }
 
@@ -1345,8 +1353,9 @@ void handleFeed() {
   int doseSize = size == "small" ? 1 : size == "large" ? 3 : 2;
 
   dispense(doseSize);
+  // Sempre tenta registrar - se offline, vai pra fila de pendentes
+  sendFeedingLog(doseSize, nullptr, "button");
   if (wifiConnected) {
-    sendFeedingLog(doseSize, nullptr, "button");  // Trigger "button" para acionamento local
     sendStatus();
   }
 
