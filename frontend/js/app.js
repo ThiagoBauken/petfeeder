@@ -174,12 +174,19 @@ async function loadHistory() {
         params.days = days;
 
         const result = await api.getHistory(params);
+        console.log('[HISTORY] Resposta da API:', result);
         if (result.success) {
             state.history = result.data;
+            console.log('[HISTORY] Dados carregados:', state.history.length, 'registros');
+            if (state.history.length > 0) {
+                console.log('[HISTORY] Primeiro registro:', state.history[0]);
+            }
             renderHistoryList();
+        } else {
+            console.warn('[HISTORY] API retornou success=false:', result);
         }
     } catch (error) {
-        console.error('Error loading history:', error);
+        console.error('[HISTORY] Erro ao carregar:', error);
         showToast('Erro ao carregar histórico', 'error');
     }
 }
