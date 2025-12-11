@@ -556,17 +556,28 @@ function renderHistoryList() {
         // Trata timestamp - pode vir em diferentes formatos
         let dateStr = 'Data desconhecida';
         if (item.timestamp) {
-            const date = new Date(item.timestamp);
+            let date = new Date(item.timestamp);
+
+            // Se falhou, tenta substituir espaço por T (formato ISO)
+            if (isNaN(date.getTime()) && typeof item.timestamp === 'string') {
+                date = new Date(item.timestamp.replace(' ', 'T'));
+            }
+
+            // Se ainda falhou, tenta parsear manualmente
+            if (isNaN(date.getTime()) && typeof item.timestamp === 'string') {
+                const parts = item.timestamp.match(/(\d{4})-(\d{2})-(\d{2})[T\s](\d{2}):(\d{2}):(\d{2})/);
+                if (parts) {
+                    date = new Date(parts[1], parts[2]-1, parts[3], parts[4], parts[5], parts[6]);
+                }
+            }
+
             if (!isNaN(date.getTime())) {
                 dateStr = `${date.toLocaleDateString('pt-BR')} às ${date.toLocaleTimeString('pt-BR')}`;
             } else {
-                // Tenta parsear formato SQLite (YYYY-MM-DD HH:MM:SS)
-                const parts = item.timestamp.match(/(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2}):(\d{2})/);
-                if (parts) {
-                    const d = new Date(parts[1], parts[2]-1, parts[3], parts[4], parts[5], parts[6]);
-                    dateStr = `${d.toLocaleDateString('pt-BR')} às ${d.toLocaleTimeString('pt-BR')}`;
-                }
+                console.warn('Timestamp inválido:', item.timestamp, 'Item completo:', item);
             }
+        } else {
+            console.warn('Item sem timestamp:', item);
         }
         const statusIcon = item.status === 'success' ? 'check-circle' : 'exclamation-circle';
         const statusColor = item.status === 'success' ? '#48bb78' : '#f56565';
