@@ -1374,6 +1374,8 @@ function getTriggerLabel(trigger) {
     const labels = {
         manual: 'Manual',
         scheduled: 'Programado',
+        scheduled_offline: 'Programado (Offline)',
+        remote: 'Remoto',
         app: 'Aplicativo',
         button: 'Botão',
         voice: 'Voz',

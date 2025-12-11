@@ -107,6 +107,9 @@ RTC_DATA_ATTR time_t lastSyncedTime = 0;       // Última hora sincronizada (epo
 RTC_DATA_ATTR uint32_t lastSleepDuration = 0;  // Duração do último sono (segundos)
 RTC_DATA_ATTR bool timeWasSynced = false;      // Se já sincronizou pelo menos uma vez
 
+// Para modo ativo: rastreia tempo desde último sync usando millis()
+unsigned long lastSyncMillis = 0;              // millis() quando sincronizou NTP
+
 // Configuração de fallback (modo ativo verifica a cada 1 min, então 3 min é suficiente)
 #define FALLBACK_WINDOW_MINUTES 3  // Executa horários perdidos nos últimos 3 min
 
@@ -151,7 +154,7 @@ bool fetchSchedules();
 void sendStatus();
 void registerDevice();
 void checkCommands();
-void sendFeedingLog(int doseSize, const char* petName = nullptr);
+void sendFeedingLog(int doseSize, const char* petName = nullptr, const char* trigger = "scheduled");
 void dispense(int doseSize);
 float readFoodLevel();
 void handleRoot();
@@ -202,8 +205,9 @@ bool syncTime() {
     // Salva tempo sincronizado para uso offline (RTC + Flash)
     time(&lastSyncedTime);
     timeWasSynced = true;
+    lastSyncMillis = millis();  // Marca quando sincronizou (para modo ativo)
     saveTimeToFlash();  // Salva na flash para sobreviver power cycle
-    Serial.printf("[NTP] Tempo salvo para modo offline: %ld\n", lastSyncedTime);
+    Serial.printf("[NTP] Tempo salvo para modo offline: %ld (millis=%lu)\n", lastSyncedTime, lastSyncMillis);
 
     return true;
   } else {
@@ -754,7 +758,7 @@ void sendStatus() {
   }
 }
 
-void sendFeedingLog(int doseSize, const char* petName) {
+void sendFeedingLog(int doseSize, const char* petName, const char* trigger) {
   // Se offline, adiciona a fila para enviar depois
   if (!wifiConnected || deviceId.length() == 0) {
     Serial.println("[LOG] Offline - adicionando a fila de pendentes");
@@ -772,7 +776,7 @@ void sendFeedingLog(int doseSize, const char* petName) {
   StaticJsonDocument<256> doc;
   doc["device_id"] = deviceId;
   doc["size"] = size;
-  doc["trigger"] = "scheduled";
+  doc["trigger"] = trigger;  // Usa o trigger passado como parametro
   doc["food_level_after"] = (int)readFoodLevel();
   if (petName != nullptr) {
     doc["pet_name"] = petName;  // Envia nome do pet para o servidor
@@ -908,9 +912,10 @@ void checkCommands() {
       if (cmd == "feed") {
         String size = doc["size"] | "medium";
         int doseSize = size == "small" ? 1 : size == "large" ? 3 : 2;
-        Serial.printf("[COMANDO] Alimentar: %s\n", size.c_str());
+        Serial.printf("[COMANDO] Alimentar remoto: %s\n", size.c_str());
         dispense(doseSize);
-        sendFeedingLog(doseSize);
+        // NAO chama sendFeedingLog() - o backend ja registrou no /api/feed/now
+        // Isso evita duplicar entradas no historico
         sendStatus();
       } else if (cmd == "sync") {
         Serial.println("[COMANDO] Sync");
@@ -1011,22 +1016,34 @@ void goToSleep(uint32_t seconds) {
   esp_deep_sleep_start();
 }
 
-// Estima tempo atual quando offline (baseado no último tempo sincronizado + duração do sono)
+// Estima tempo atual quando offline (baseado no último tempo sincronizado)
+// No modo ativo usa millis(), no Deep Sleep usa lastSleepDuration
 bool estimateOfflineTime(struct tm* timeinfo) {
   if (!timeWasSynced || lastSyncedTime == 0) {
     Serial.println("[OFFLINE] Nunca sincronizou - impossivel estimar tempo");
     return false;
   }
 
-  // Estima tempo atual = último tempo salvo + duração do sono
-  time_t estimatedTime = lastSyncedTime + lastSleepDuration;
+  uint32_t elapsedSeconds;
+
+  // No modo ativo, usa millis() para calcular tempo decorrido
+  if (activeMode && lastSyncMillis > 0) {
+    elapsedSeconds = (millis() - lastSyncMillis) / 1000;
+    Serial.printf("[OFFLINE] Modo ativo: %lu segundos desde sync\n", elapsedSeconds);
+  } else {
+    // No Deep Sleep, usa duração do sono
+    elapsedSeconds = lastSleepDuration;
+  }
+
+  // Estima tempo atual = último tempo salvo + tempo decorrido
+  time_t estimatedTime = lastSyncedTime + elapsedSeconds;
 
   // Converte para struct tm
   struct tm* tmpTime = localtime(&estimatedTime);
   if (tmpTime) {
     memcpy(timeinfo, tmpTime, sizeof(struct tm));
-    Serial.printf("[OFFLINE] Tempo estimado: %02d:%02d (baseado em sync anterior + %ds de sono)\n",
-                  timeinfo->tm_hour, timeinfo->tm_min, lastSleepDuration);
+    Serial.printf("[OFFLINE] Tempo estimado: %02d:%02d (sync + %ds)\n",
+                  timeinfo->tm_hour, timeinfo->tm_min, elapsedSeconds);
     return true;
   }
 
@@ -1329,7 +1346,7 @@ void handleFeed() {
 
   dispense(doseSize);
   if (wifiConnected) {
-    sendFeedingLog(doseSize);
+    sendFeedingLog(doseSize, nullptr, "button");  // Trigger "button" para acionamento local
     sendStatus();
   }
 
