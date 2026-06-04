@@ -1734,6 +1734,10 @@ void handleTimerWakeup() {
 
   // Sync se necessario
   if (wifiConnected) {
+    // Garante registro/segredo (idempotente: sai na hora se ja houver segredo).
+    // Necessario caso o segredo tenha sido limpo por uma resposta 401/404.
+    registerDevice();
+
     // Envia alimentacoes pendentes (feitas offline)
     sendPendingFeeds();
 
