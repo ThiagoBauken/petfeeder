@@ -174,16 +174,9 @@ async function loadHistory() {
         params.days = days;
 
         const result = await api.getHistory(params);
-        console.log('[HISTORY] Resposta da API:', result);
         if (result.success) {
             state.history = result.data;
-            console.log('[HISTORY] Dados carregados:', state.history.length, 'registros');
-            if (state.history.length > 0) {
-                console.log('[HISTORY] Primeiro registro:', state.history[0]);
-            }
             renderHistoryList();
-        } else {
-            console.warn('[HISTORY] API retornou success=false:', result);
         }
     } catch (error) {
         console.error('[HISTORY] Erro ao carregar:', error);
@@ -233,8 +226,15 @@ function connectWebSocket() {
     });
 
     ws.on('feeding', (data) => {
-        console.log('Feeding event:', data);
-        showToast(`Alimentação: ${data.data.pet_name} - ${data.data.amount}g`, 'success');
+        const d = data.data || data;
+        showToast(`Alimentação: ${d.pet_name} - ${d.amount}g`, 'success');
+        loadHistory();
+    });
+
+    // Alimentação executada pelo próprio ESP32 (manual/agendada)
+    ws.on('feeding_complete', (data) => {
+        const d = data.data || data;
+        showToast(`Alimentação concluída: ${d.pet_name} - ${d.amount}g`, 'success');
         loadHistory();
     });
 
@@ -1011,10 +1011,6 @@ async function addSchedule() {
     const globalDoseRadio = document.querySelector('input[name="scheduleDose"]:checked');
     const globalDoseSize = globalDoseRadio?.value || 'medium';
 
-    // Debug
-    console.log('[addSchedule] Radio selecionado:', globalDoseRadio);
-    console.log('[addSchedule] Dose global:', globalDoseSize);
-
     if (!petId) {
         showToast('Selecione um pet', 'error');
         return;
@@ -1029,8 +1025,6 @@ async function addSchedule() {
         if (timeInput && timeInput.value) {
             const individualDose = doseSelect?.value || '';
             const effectiveDoseSize = individualDose || globalDoseSize;
-
-            console.log(`[addSchedule] Horário ${timeInput.value}: individual="${individualDose}", efetiva="${effectiveDoseSize}", gramas=${DOSE_CONFIG[effectiveDoseSize].grams}`);
 
             scheduleItems.push({
                 time: timeInput.value,
@@ -1373,82 +1367,46 @@ function updateConnectionStatus() {
 }
 
 function updateDeviceSelects() {
-    const selects = [
-        'feedDeviceSelect',
-        'petDeviceSelect',
-        'scheduleDeviceSelect',
-        'historyDeviceFilter',
-    ];
+    const selects = ['petDeviceSelect', 'historyDeviceFilter'];
 
     selects.forEach(selectId => {
         const select = document.getElementById(selectId);
         if (!select) return;
 
         const currentValue = select.value;
-        select.innerHTML = '<option value="">Selecione...</option>' +
+        const placeholder = selectId === 'historyDeviceFilter'
+            ? '<option value="">Todos os dispositivos</option>'
+            : '<option value="">Selecione...</option>';
+        select.innerHTML = placeholder +
             state.devices.map(d => `<option value="${d.id}">${d.name}</option>`).join('');
         select.value = currentValue;
     });
-}
-
-function updatePetSelects() {
-    const select = document.getElementById('historyPetFilter');
-    if (select) {
-        const currentValue = select.value;
-        select.innerHTML = '<option value="">Todos os pets</option>' +
-            state.pets.map(p => `<option value="${p.id}">${p.name}</option>`).join('');
-        select.value = currentValue;
-    }
-}
-
-function updatePetSelectForFeeding() {
-    const deviceId = parseInt(document.getElementById('feedDeviceSelect').value);
-    const select = document.getElementById('feedPetSelect');
-
-    if (!deviceId) {
-        select.innerHTML = '<option value="">Selecione...</option>';
-        return;
-    }
-
-    const devicePets = state.pets.filter(p => p.device_id === deviceId);
-    select.innerHTML = '<option value="">Selecione...</option>' +
-        devicePets.map(p => `<option value="${p.id}">${p.name}</option>`).join('');
-}
-
-function updatePetSelectForSchedule() {
-    const deviceId = parseInt(document.getElementById('scheduleDeviceSelect').value);
-    const select = document.getElementById('schedulePetSelect');
-
-    if (!deviceId) {
-        select.innerHTML = '<option value="">Selecione...</option>';
-        return;
-    }
-
-    const devicePets = state.pets.filter(p => p.device_id === deviceId);
-    select.innerHTML = '<option value="">Selecione...</option>' +
-        devicePets.map(p => `<option value="${p.id}">${p.name}</option>`).join('');
 }
 
 // ===================================
 // MODALS
 // ===================================
 
-// Populate pet select with all pets
+// Popula TODOS os selects de pet: modais (alimentar/agendar) e filtro do histórico
 function updatePetSelects() {
-    const petSelects = ['feedPetSelect', 'schedulePetSelect'];
-
-    petSelects.forEach(selectId => {
+    ['feedPetSelect', 'schedulePetSelect'].forEach(selectId => {
         const select = document.getElementById(selectId);
-        if (select) {
-            select.innerHTML = '<option value="">Selecione um pet...</option>' +
-                state.pets.map(p => {
-                    const device = state.devices.find(d => d.id === p.device_id);
-                    const deviceName = device ? ` (${device.name})` : '';
-                    const emoji = getPetEmoji(p.type);
-                    return `<option value="${p.id}">${emoji} ${p.name}${deviceName}</option>`;
-                }).join('');
-        }
+        if (!select) return;
+        select.innerHTML = '<option value="">Selecione um pet...</option>' +
+            state.pets.map(p => {
+                const device = state.devices.find(d => d.id === p.device_id);
+                const deviceName = device ? ` (${device.name})` : '';
+                return `<option value="${p.id}">${getPetEmoji(p.type)} ${p.name}${deviceName}</option>`;
+            }).join('');
     });
+
+    const histSelect = document.getElementById('historyPetFilter');
+    if (histSelect) {
+        const currentValue = histSelect.value;
+        histSelect.innerHTML = '<option value="">Todos os pets</option>' +
+            state.pets.map(p => `<option value="${p.id}">${p.name}</option>`).join('');
+        histSelect.value = currentValue;
+    }
 }
 
 function showFeedNowModal() {

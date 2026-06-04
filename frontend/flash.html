@@ -3,8 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Flash ESP32 - PetFeeder</title>
-    <script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
+    <title>Gravar Firmware ESP32 - PetFeeder</title>
     <style>
         * {
             margin: 0;
@@ -62,26 +61,6 @@
             color: #aaa;
             margin-bottom: 30px;
             line-height: 1.6;
-        }
-
-        esp-web-install-button {
-            --inst-button-color: #4CAF50;
-        }
-
-        esp-web-install-button button {
-            background: linear-gradient(135deg, #4CAF50, #45a049);
-            color: white;
-            border: none;
-            padding: 15px 40px;
-            font-size: 1.2rem;
-            border-radius: 10px;
-            cursor: pointer;
-            transition: transform 0.2s, box-shadow 0.2s;
-        }
-
-        esp-web-install-button button:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 10px 30px rgba(76, 175, 80, 0.3);
         }
 
         .steps {
@@ -182,70 +161,51 @@
 <body>
     <div class="container">
         <header>
-            <h1>Flash ESP32</h1>
-            <p>Grave o firmware PetFeeder diretamente pelo navegador</p>
+            <h1>Gravar Firmware ESP32</h1>
+            <p>Como instalar o firmware do PetFeeder no seu ESP32</p>
         </header>
-
-        <div class="browser-warning" id="browserWarning">
-            <h4>Navegador Incompativel</h4>
-            <p>O Web Serial API requer <strong>Google Chrome</strong>, <strong>Microsoft Edge</strong> ou <strong>Opera</strong> em desktop.</p>
-            <p>Safari e Firefox nao sao suportados.</p>
-        </div>
 
         <div class="flash-card">
             <div class="flash-icon">🔌</div>
-            <h2>Instalar Firmware PetFeeder</h2>
+            <h2>Gravar o firmware no ESP32</h2>
             <p>
-                Conecte seu ESP32 via cabo USB e clique no botao abaixo.<br>
-                O firmware sera baixado e gravado automaticamente.
+                O firmware fica no repositório em <code>PetFeeder_WiFiSetup/</code> e é gravado
+                com o <strong>Arduino IDE</strong>. Depois de gravado uma vez, toda a configuração
+                (WiFi, conta e horários) é feita pelo próprio aparelho e por este site — sem cabo.
             </p>
 
-            <esp-web-install-button manifest="/firmware/manifest.json">
-                <button slot="activate">Instalar Firmware</button>
-                <span slot="unsupported">
-                    <button disabled style="background: #666; cursor: not-allowed;">
-                        Navegador nao suportado
-                    </button>
-                </span>
-                <span slot="not-allowed">
-                    <button disabled style="background: #666; cursor: not-allowed;">
-                        Acesso negado - use HTTPS
-                    </button>
-                </span>
-            </esp-web-install-button>
-
             <div class="steps">
-                <h3>Como funciona:</h3>
+                <h3>Passo a passo (Arduino IDE):</h3>
 
                 <div class="step">
                     <div class="step-number">1</div>
                     <div class="step-content">
-                        <h4>Conecte o ESP32</h4>
-                        <p>Use um cabo USB de dados (nao apenas de carga)</p>
+                        <h4>Instale o suporte ao ESP32</h4>
+                        <p>Arduino IDE → Gerenciador de Placas → instale "esp32" (Espressif). Instale também a biblioteca <strong>ArduinoJson</strong>.</p>
                     </div>
                 </div>
 
                 <div class="step">
                     <div class="step-number">2</div>
                     <div class="step-content">
-                        <h4>Clique em "Instalar Firmware"</h4>
-                        <p>O navegador vai pedir para selecionar a porta serial</p>
+                        <h4>Abra o sketch</h4>
+                        <p>Abra <code>PetFeeder_WiFiSetup/PetFeeder_WiFiSetup.ino</code> e selecione a placa "ESP32 Dev Module".</p>
                     </div>
                 </div>
 
                 <div class="step">
                     <div class="step-number">3</div>
                     <div class="step-content">
-                        <h4>Selecione a porta COM</h4>
-                        <p>Geralmente aparece como "CP2102" ou "CH340"</p>
+                        <h4>Conecte e selecione a porta</h4>
+                        <p>Use um cabo USB de dados. A porta costuma aparecer como "CP2102" ou "CH340".</p>
                     </div>
                 </div>
 
                 <div class="step">
                     <div class="step-number">4</div>
                     <div class="step-content">
-                        <h4>Aguarde o flash (~60 segundos)</h4>
-                        <p>O ESP32 sera reiniciado automaticamente</p>
+                        <h4>Clique em Upload</h4>
+                        <p>Ao ligar, o ESP32 cria a rede <strong>PetFeeder-Setup</strong> (senha 12345678). Conecte-se a ela pelo celular e informe WiFi + e-mail da sua conta.</p>
                     </div>
                 </div>
             </div>
@@ -253,22 +213,15 @@
             <div class="warning">
                 <h4>Requisitos:</h4>
                 <ul>
-                    <li>Google Chrome, Edge ou Opera (desktop)</li>
+                    <li>Arduino IDE (com suporte a ESP32 + biblioteca ArduinoJson)</li>
                     <li>Driver USB instalado (CP2102 ou CH340)</li>
                     <li>Cabo USB de dados</li>
-                    <li>ESP32 DevKit</li>
+                    <li>ESP32 DevKit + motor 28BYJ-48 e sensor HC-SR04</li>
                 </ul>
             </div>
         </div>
 
         <a href="dashboard.html" class="back-link">← Voltar ao Dashboard</a>
     </div>
-
-    <script>
-        // Check browser support
-        if (!('serial' in navigator)) {
-            document.getElementById('browserWarning').classList.add('show');
-        }
-    </script>
 </body>
 </html>
