@@ -1,0 +1,18 @@
+# Nunca copiar node_modules do host (sqlite3 é nativo e precisa ser compilado no container)
+**/node_modules
+
+# Dados/local
+data/
+*.db
+*.sqlite
+*.sqlite3
+logs/
+*.log
+
+# Git e docs (não vão para a imagem)
+.git
+docs/
+examples/
+PetFeeder_WiFiSetup/
+README.md
+.env

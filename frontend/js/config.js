@@ -1,14 +1,11 @@
 // Frontend Configuration
 const CONFIG = {
-  // API Configuration - Usa URL relativa (mesmo servidor serve frontend e backend)
-  API_URL: window.location.hostname === 'localhost'
-    ? 'http://localhost:3000/api'
-    : `${window.location.origin}/api`,
+  // API e WebSocket usam SEMPRE a mesma origem do site.
+  // O backend serve o frontend e o WebSocket (path /ws) no mesmo servidor/porta,
+  // então isso funciona em localhost e atrás de qualquer proxy/HTTPS sem ajustes.
+  API_URL: `${window.location.origin}/api`,
 
-  // WebSocket Configuration
-  WS_URL: window.location.hostname === 'localhost'
-    ? 'ws://localhost:8081'
-    : `wss://${window.location.host.replace('telegram-petfeeder', 'telegram-petfeeder-ws')}`,
+  WS_URL: `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws`,
 
   // Local Storage Keys
   STORAGE_KEYS: {

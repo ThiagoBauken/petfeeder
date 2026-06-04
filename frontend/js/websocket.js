@@ -124,66 +124,25 @@ class WebSocketClient {
     }
   }
 
-  // Send command
-  sendCommand(command, data = {}) {
-    this.send({
-      type: 'command',
-      command,
-      data,
-    });
-  }
-
   // Handle incoming message
   handleMessage(message) {
-    console.log('WebSocket message:', message);
+    if (!message || !message.type) return;
 
-    switch (message.type) {
-      case 'connected':
-        break;
-
-      case 'authenticated':
-        this.authenticated = true;
-        this.trigger('authenticated', message);
-        // Resubscribe to previous topics
-        if (this.subscriptions.size > 0) {
-          this.subscribe(Array.from(this.subscriptions));
-        }
-        break;
-
-      case 'auth_error':
-        console.error('Authentication error:', message.message);
-        this.trigger('auth_error', message);
-        break;
-
-      case 'subscribed':
-        this.trigger('subscribed', message.topics);
-        break;
-
-      case 'device_status':
-        this.trigger('device_status', message);
-        break;
-
-      case 'feeding':
-        this.trigger('feeding', message);
-        break;
-
-      case 'alert':
-        this.trigger('alert', message);
-        break;
-
-      case 'pong':
-        break;
-
-      case 'error':
-        console.error('WebSocket error message:', message.message);
-        this.trigger('error', message);
-        break;
-
-      default:
-        console.warn('Unknown message type:', message.type);
+    // Controle de autenticação
+    if (message.type === 'authenticated') {
+      this.authenticated = true;
+      // Reinscreve nos tópicos anteriores
+      if (this.subscriptions.size > 0) {
+        this.subscribe(Array.from(this.subscriptions));
+      }
+    } else if (message.type === 'auth_error') {
+      console.error('WebSocket auth error:', message.message);
+      this.authenticated = false;
     }
 
-    // Trigger generic message handler
+    // Dispara o handler específico do tipo (device_status, feeding, feeding_complete,
+    // food_alert, alert, subscribed, pong...) e o handler genérico 'message'.
+    this.trigger(message.type, message);
     this.trigger('message', message);
   }
 

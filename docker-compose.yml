@@ -1,75 +1,36 @@
-version: '3.8'
-
-# ===========================================
-# PetFeeder SaaS - Docker Compose (SQLite)
-# ===========================================
-# Para iniciar: docker-compose up -d
-# Para parar: docker-compose down
-# Para logs: docker-compose logs -f
+# PetFeeder — orquestração (container único: backend Node.js + SQLite + frontend)
+#
+# Uso:
+#   1) cp .env.example .env  e defina JWT_SECRET / JWT_REFRESH_SECRET
+#   2) docker compose up -d --build
+#   3) acesse http://localhost:8080  (ou a HTTP_PORT que definir)
 
 services:
-  # ===========================================
-  # MQTT BROKER (Mosquitto)
-  # ===========================================
-  mosquitto:
-    image: eclipse-mosquitto:2
-    container_name: petfeeder-mqtt
-    restart: unless-stopped
-    volumes:
-      - ./mosquitto/config:/mosquitto/config
-      - mosquitto_data:/mosquitto/data
-      - mosquitto_log:/mosquitto/log
-    ports:
-      - "1883:1883"   # MQTT
-      - "9001:9001"   # WebSocket
-    networks:
-      - petfeeder-network
-
-  # ===========================================
-  # BACKEND (Node.js + SQLite)
-  # ===========================================
   backend:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: petfeeder-backend
+    container_name: petfeeder
     restart: unless-stopped
-    depends_on:
-      - mosquitto
     environment:
       NODE_ENV: production
       PORT: 3000
-
-      # MQTT
-      MQTT_BROKER: mqtt://mosquitto:1883
-      MQTT_USERNAME: ${MQTT_USERNAME:-backend}
-      MQTT_PASSWORD: ${MQTT_PASSWORD:-backend123}
-
-      # Security
-      JWT_SECRET: ${JWT_SECRET:-petfeeder-jwt-secret-2024}
+      DB_PATH: /app/data/petfeeder.db
+      # Obrigatórios: o compose falha se não estiverem no .env (sem defaults inseguros)
+      JWT_SECRET: ${JWT_SECRET:?defina JWT_SECRET no arquivo .env}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:?defina JWT_REFRESH_SECRET no arquivo .env}
+      # Allowlist de CORS (vazio = apenas mesma origem)
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
     ports:
-      - "80:3000"      # Expõe na porta 80
-      - "8081:8081"    # WebSocket
+      - "${HTTP_PORT:-8080}:3000"
     volumes:
-      - ./data:/app/data          # SQLite database
-      - ./uploads:/app/uploads    # Uploaded files
-      - ./logs:/app/logs          # Log files
-    networks:
-      - petfeeder-network
+      - petfeeder_data:/app/data
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
-# ===========================================
-# VOLUMES
-# ===========================================
 volumes:
-  mosquitto_data:
-    name: petfeeder-mosquitto-data
-  mosquitto_log:
-    name: petfeeder-mosquitto-log
-
-# ===========================================
-# NETWORKS
-# ===========================================
-networks:
-  petfeeder-network:
-    name: petfeeder-network
-    driver: bridge
+  petfeeder_data:
+    name: petfeeder-data

@@ -83,6 +83,7 @@ String savedSSID = "";
 String savedPassword = "";
 String deviceId = "";
 String userEmail = "";
+String deviceSecret = "";  // Segredo emitido pelo servidor no registro (autentica as chamadas)
 
 bool configMode = false;
 bool wifiConnected = false;
@@ -435,6 +436,7 @@ void loadConfig() {
   savedPassword = preferences.getString("password", "");
   deviceId = getDeviceId();
   userEmail = preferences.getString("email", "");
+  deviceSecret = preferences.getString("dsecret", "");
   scheduleCount = preferences.getInt("schedCount", 0);
   powerSaveEnabled = preferences.getBool("powerSave", false);  // Carrega config de economia
 
@@ -497,6 +499,7 @@ void clearConfig() {
   savedSSID = "";
   savedPassword = "";
   userEmail = "";
+  deviceSecret = "";
   scheduleCount = 0;
   deviceRegistered = false;
   pendingFeedCount = 0;
@@ -629,6 +632,7 @@ void sendPendingFeeds() {
     String url = serverUrl + "/api/feed/log";
     http.begin(httpsClient, url);
     http.addHeader("Content-Type", "application/json");
+    if (deviceSecret.length()) http.addHeader("X-Device-Secret", deviceSecret);
     http.setTimeout(10000);
 
     String size = pendingFeeds[i].doseSize == 1 ? "small" :
@@ -687,7 +691,9 @@ void sendPendingFeeds() {
 // ==================== COMUNICACAO COM SERVIDOR ====================
 
 void registerDevice() {
-  if (userEmail.length() == 0 || deviceRegistered) return;
+  if (userEmail.length() == 0) return;
+  // Já temos o segredo salvo => dispositivo já reivindicado, não precisa registrar de novo
+  if (deviceSecret.length() > 0) { deviceRegistered = true; return; }
 
   Serial.println("[REGISTRO] Registrando dispositivo...");
 
@@ -708,7 +714,15 @@ void registerDevice() {
   int httpCode = http.POST(json);
 
   if (httpCode == 200 || httpCode == 201) {
-    Serial.println("[OK] Dispositivo registrado!");
+    String response = http.getString();
+    StaticJsonDocument<384> resp;
+    if (!deserializeJson(resp, response) && resp.containsKey("device_secret")) {
+      deviceSecret = resp["device_secret"].as<String>();
+      preferences.putString("dsecret", deviceSecret);
+      Serial.println("[OK] Dispositivo registrado e segredo salvo!");
+    } else {
+      Serial.println("[OK] Dispositivo registrado.");
+    }
     deviceRegistered = true;
   } else {
     String response = http.getString();
@@ -736,6 +750,7 @@ void sendStatus() {
   String url = serverUrl + "/api/devices/" + deviceId + "/status";
   http.begin(httpsClient, url);
   http.addHeader("Content-Type", "application/json");
+  if (deviceSecret.length()) http.addHeader("X-Device-Secret", deviceSecret);
   http.setTimeout(10000);
 
   StaticJsonDocument<512> doc;
@@ -778,6 +793,7 @@ void sendFeedingLog(int doseSize, const char* petName, const char* trigger) {
   String url = serverUrl + "/api/feed/log";
   http.begin(httpsClient, url);
   http.addHeader("Content-Type", "application/json");
+  if (deviceSecret.length()) http.addHeader("X-Device-Secret", deviceSecret);
 
   String size = doseSize == 1 ? "small" : doseSize == 3 ? "large" : "medium";
 
@@ -814,6 +830,7 @@ bool fetchSchedules() {
   HTTPClient http;
   String url = serverUrl + "/api/devices/" + deviceId + "/schedules";
   http.begin(httpsClient, url);
+  if (deviceSecret.length()) http.addHeader("X-Device-Secret", deviceSecret);
   http.setTimeout(10000);
 
   int httpCode = http.GET();
@@ -904,6 +921,7 @@ void checkCommands() {
   String url = serverUrl + "/api/devices/" + deviceId + "/commands";
   Serial.printf("[COMMANDS] GET %s\n", url.c_str());
   http.begin(httpsClient, url);
+  if (deviceSecret.length()) http.addHeader("X-Device-Secret", deviceSecret);
   http.setTimeout(5000);
 
   int httpCode = http.GET();
@@ -933,12 +951,24 @@ void checkCommands() {
       } else if (cmd == "check_level") {
         Serial.println("[COMANDO] Verificar nivel de racao");
         sendStatus();  // Le o sensor e envia pro servidor
+      } else if (cmd == "restart") {
+        Serial.println("[COMANDO] Reiniciar dispositivo");
+        http.end();
+        delay(200);
+        ESP.restart();
       }
     } else {
       Serial.println("[COMMANDS] Nenhum comando pendente");
     }
   } else {
     Serial.printf("[COMMANDS] ERRO HTTP: %d\n", httpCode);
+    if (httpCode == 401 || httpCode == 404) {
+      // Segredo rejeitado / dispositivo desconhecido: limpa para re-registrar no proximo ciclo
+      Serial.println("[COMMANDS] Segredo invalido - limpando para re-registrar");
+      deviceSecret = "";
+      preferences.putString("dsecret", "");
+      deviceRegistered = false;
+    }
   }
 
   http.end();

@@ -164,10 +164,6 @@ class APIClient {
     return this.request('GET', '/devices');
   }
 
-  async getDevice(id) {
-    return this.request('GET', `/devices/${id}`);
-  }
-
   async linkDevice(deviceId, name) {
     return this.request('POST', '/devices/link', { deviceId, name });
   }
@@ -178,14 +174,6 @@ class APIClient {
 
   async deleteDevice(id) {
     return this.request('DELETE', `/devices/${id}`);
-  }
-
-  async sendCommand(deviceId, command, data = {}) {
-    return this.request('POST', `/devices/${deviceId}/command`, { command, data });
-  }
-
-  async getTelemetry(deviceId, limit = 100) {
-    return this.request('GET', `/devices/${deviceId}/telemetry?limit=${limit}`);
   }
 
   async restartDevice(deviceId) {
@@ -220,10 +208,6 @@ class APIClient {
     return this.request('DELETE', `/pets/${id}`);
   }
 
-  async getPetStatistics(id, days = 30) {
-    return this.request('GET', `/pets/${id}/statistics?days=${days}`);
-  }
-
   // ====================
   // FEED ENDPOINTS
   // ====================
@@ -239,11 +223,6 @@ class APIClient {
   async getHistory(params = {}) {
     const queryString = new URLSearchParams(params).toString();
     return this.request('GET', `/feed/history?${queryString}`);
-  }
-
-  async getStatistics(params = {}) {
-    const queryString = new URLSearchParams(params).toString();
-    return this.request('GET', `/feed/statistics?${queryString}`);
   }
 
   async getSchedules(params = {}) {
