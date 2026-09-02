@@ -14,6 +14,33 @@ let state = {
 };
 
 // ===================================
+// SEGURANÇA: escape de HTML
+// ===================================
+
+// Todo dado que vem do banco (nome de pet/dispositivo) ou do ESP32 (pet_name,
+// ip) passa por aqui antes de entrar em innerHTML. Sem isso um nome contendo
+// < > " ' era injetado direto no DOM — XSS armazenado, e um pet chamado
+// D'Artagnan já quebrava os botões.
+function esc(value) {
+    return String(value ?? '').replace(/[&<>"']/g, (c) => ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#39;',
+    })[c]);
+}
+
+// Converte um valor numérico não confiável (ex.: nível de ração vindo do
+// dispositivo) para um número seguro dentro de uma faixa, ou null.
+function safeNumber(value, min, max) {
+    if (value === undefined || value === null || value === '') return null;
+    const n = Number(value);
+    if (!Number.isFinite(n)) return null;
+    return Math.max(min, Math.min(max, n));
+}
+
+// ===================================
 // INITIALIZATION
 // ===================================
 
@@ -53,8 +80,9 @@ async function initializeApp() {
         console.error('Initialization error:', error);
         showToast('Erro ao inicializar aplicação', 'error');
 
-        // If auth error, logout
-        if (error.message.includes('401') || error.message.includes('token')) {
+        // Erro de autenticação: sair. Antes checava a string da mensagem
+        // procurando "401", o que praticamente nunca casava.
+        if (error.status === 401 || error.status === 403) {
             logout();
         }
     }
@@ -79,15 +107,21 @@ async function loadUserData() {
 }
 
 function logout() {
-    // Disconnect WebSocket
     if (ws) {
         ws.disconnect();
     }
 
-    // Call logout API
-    api.logoutAPI().catch(console.error);
+    // Avisa o servidor (revoga o token) sem bloquear o redirecionamento.
+    api.logoutAPI().catch(() => { /* servidor fora do ar não impede sair */ });
 
-    // Redirect to login
+    // Limpa a sessão local de forma SÍNCRONA antes de navegar: antes havia
+    // corrida com o redirect e o "Sair" às vezes não deslogava de fato.
+    try {
+        localStorage.removeItem(CONFIG.STORAGE_KEYS.ACCESS_TOKEN);
+        localStorage.removeItem(CONFIG.STORAGE_KEYS.REFRESH_TOKEN);
+        localStorage.removeItem(CONFIG.STORAGE_KEYS.USER_DATA);
+    } catch (e) { /* modo privado pode bloquear o storage */ }
+
     window.location.href = 'login.html';
 }
 
@@ -307,7 +341,9 @@ function renderFoodLevels() {
 
     container.innerHTML = state.devices.map(device => {
         const status = state.deviceStatus[device.device_id] || {};
-        const level = status.food_level !== undefined ? status.food_level : null;
+        // Nível vem do dispositivo: coagido para 0-100 antes de entrar no
+        // atributo style (era interpolado cru em width: ${level}%).
+        const level = safeNumber(status.food_level, 0, 100);
         const levelClass = level === null ? '' : level > 50 ? 'level-high' : level > 20 ? 'level-medium' : 'level-low';
         const levelText = level !== null ? `${level}%` : 'Aguardando...';
         const lastSeen = status.lastSeen ? formatTimeAgo(status.lastSeen) : 'Nunca';
@@ -317,7 +353,7 @@ function renderFoodLevels() {
                 <div class="food-level-header">
                     <div class="device-name">
                         <i class="fas fa-microchip" style="color: ${device.status === 'online' ? '#28a745' : '#dc3545'}"></i>
-                        ${device.name || device.device_id}
+                        ${esc(device.name || device.device_id)}
                     </div>
                     <div class="level-value" style="color: ${level === null ? '#999' : level > 50 ? '#28a745' : level > 20 ? '#fd7e14' : '#dc3545'}">
                         ${levelText}
@@ -415,18 +451,18 @@ function renderPetCards() {
             <div class="pet-card-header">
                 <div class="pet-avatar">${getPetEmoji(pet.type)}</div>
                 <div>
-                    <h3>${pet.name}</h3>
-                    <p class="pet-type">${getPetTypeLabel(pet.type)}</p>
+                    <h3>${esc(pet.name)}</h3>
+                    <p class="pet-type">${esc(getPetTypeLabel(pet.type))}</p>
                 </div>
             </div>
             <div class="pet-card-body">
                 <div class="pet-stat">
                     <span class="pet-stat-label">Dispositivo:</span>
-                    <span class="pet-stat-value">${pet.device_name || 'N/A'}</span>
+                    <span class="pet-stat-value">${esc(pet.device_name || 'N/A')}</span>
                 </div>
                 <div class="pet-stat">
                     <span class="pet-stat-label">Compartimento:</span>
-                    <span class="pet-stat-value">${pet.compartment}</span>
+                    <span class="pet-stat-value">${esc(pet.compartment)}</span>
                 </div>
                 <div class="pet-stat">
                     <span class="pet-stat-label">Diário:</span>
@@ -460,9 +496,9 @@ function renderPetsList() {
                 <div style="display: flex; gap: 15px; align-items: center;">
                     <div class="pet-avatar" style="font-size: 32px;">${getPetEmoji(pet.type)}</div>
                     <div>
-                        <h3 style="margin: 0;">${pet.name}</h3>
+                        <h3 style="margin: 0;">${esc(pet.name)}</h3>
                         <p style="margin: 5px 0; color: #666;">
-                            ${getPetTypeLabel(pet.type)} • ${pet.device_name} • Compartimento ${pet.compartment}
+                            ${esc(getPetTypeLabel(pet.type))} • ${esc(pet.device_name)} • Compartimento ${esc(pet.compartment)}
                         </p>
                         <p style="margin: 5px 0; color: #666;">
                             Quantidade diária: ${pet.daily_amount || 0}g
@@ -473,7 +509,7 @@ function renderPetsList() {
                     <button class="btn btn-sm btn-secondary" onclick="editPet(${pet.id})">
                         <i class="fas fa-edit"></i>
                     </button>
-                    <button class="btn btn-sm btn-danger" onclick="deletePet(${pet.id}, '${pet.name}')">
+                    <button class="btn btn-sm btn-danger" data-action="delete-pet" data-id="${pet.id}">
                         <i class="fas fa-trash"></i>
                     </button>
                 </div>
@@ -544,7 +580,7 @@ function renderSchedulesList() {
                                 </span>
                             </h3>
                             <p style="margin: 5px 0; color: #666;">
-                                ${schedule.pet_name} • ${doseIcon} ${doseLabel} (${schedule.amount}g) • ${weekdays.join(', ')}
+                                ${esc(schedule.pet_name)} • ${doseIcon} ${doseLabel} (${esc(schedule.amount)}g) • ${weekdays.join(', ')}
                             </p>
                         </div>
                     </div>
@@ -669,13 +705,13 @@ function renderHistoryList() {
                     <div>
                         <h4 style="margin: 0;">
                             <i class="fas fa-${statusIcon}" style="color: ${statusColor};"></i>
-                            ${item.pet_name || 'Pet não identificado'}
+                            ${esc(item.pet_name || 'Pet não identificado')}
                         </h4>
                         <p style="margin: 5px 0; color: #666;">
-                            ${dateStr}
+                            ${esc(dateStr)}
                         </p>
                         <p style="margin: 5px 0; color: #666;">
-                            ${item.amount}g • ${getTriggerLabel(item.trigger)}
+                            ${esc(item.amount)}g • ${esc(getTriggerLabel(item.trigger))}
                         </p>
                     </div>
                 </div>
@@ -708,18 +744,18 @@ function renderDevicesList() {
             <div style="display: flex; justify-content: space-between; align-items: center;">
                 <div>
                     <h3 style="margin: 0; display: flex; align-items: center; gap: 10px;">
-                        ${device.name}
+                        ${esc(device.name)}
                         <span class="device-status device-status-${statusClass}">
                             <i class="fas ${statusIcon}"></i> ${statusText}
                         </span>
                     </h3>
                     <p style="margin: 5px 0; color: #666;">
-                        ID: ${device.device_id}
-                        ${device.food_level !== undefined ? ` • Ração: ${device.food_level}%` : ''}
+                        ID: ${esc(device.device_id)}
+                        ${device.food_level !== undefined ? ` • Ração: ${esc(safeNumber(device.food_level, 0, 100) ?? '?')}%` : ''}
                     </p>
                     <p style="margin: 5px 0; color: ${isOnline ? '#666' : '#dc3545'}; font-size: 12px;">
-                        ${device.last_seen_ago ? `Visto ${device.last_seen_ago}` : (device.last_seen ? `Visto: ${new Date(device.last_seen).toLocaleString('pt-BR')}` : 'Nunca conectado')}
-                        ${device.ip_address ? ` • IP: ${device.ip_address}` : ''}
+                        ${device.last_seen_ago ? `Visto ${esc(device.last_seen_ago)}` : (device.last_seen ? `Visto: ${esc(new Date(device.last_seen).toLocaleString('pt-BR'))}` : 'Nunca conectado')}
+                        ${device.ip_address ? ` • IP: ${esc(device.ip_address)}` : ''}
                     </p>
                     ${!isOnline ? '<p style="margin: 5px 0; color: #dc3545; font-size: 12px;"><i class="fas fa-exclamation-triangle"></i> Dispositivo pode estar desligado ou sem conexão</p>' : ''}
                 </div>
@@ -729,13 +765,13 @@ function renderDevicesList() {
                         <span class="toggle-slider"></span>
                         <span class="toggle-label"><i class="fas fa-leaf"></i> Economia</span>
                     </label>
-                    <button class="btn btn-sm btn-primary" onclick="showEditDeviceModal(${device.id}, '${device.name}')">
+                    <button class="btn btn-sm btn-primary" data-action="edit-device" data-id="${device.id}">
                         <i class="fas fa-edit"></i> Editar
                     </button>
                     <button class="btn btn-sm btn-secondary" onclick="restartDevice(${device.id})" ${!isOnline ? 'disabled title="Dispositivo offline"' : ''}>
                         <i class="fas fa-sync"></i> Reiniciar
                     </button>
-                    <button class="btn btn-sm btn-danger" onclick="unlinkDevice(${device.id}, '${device.name}')">
+                    <button class="btn btn-sm btn-danger" data-action="unlink-device" data-id="${device.id}">
                         <i class="fas fa-unlink"></i> Desvincular
                     </button>
                 </div>
@@ -932,6 +968,11 @@ async function saveEditPet() {
 
     if (!name) {
         showToast('Nome é obrigatório', 'error');
+        return;
+    }
+    // Um compartimento inválido virava NaN e era gravado como NULL no banco.
+    if (!Number.isInteger(compartment)) {
+        showToast('Selecione um compartimento válido', 'error');
         return;
     }
 
@@ -1378,7 +1419,7 @@ function updateDeviceSelects() {
             ? '<option value="">Todos os dispositivos</option>'
             : '<option value="">Selecione...</option>';
         select.innerHTML = placeholder +
-            state.devices.map(d => `<option value="${d.id}">${d.name}</option>`).join('');
+            state.devices.map(d => `<option value="${d.id}">${esc(d.name)}</option>`).join('');
         select.value = currentValue;
     });
 }
@@ -1395,8 +1436,8 @@ function updatePetSelects() {
         select.innerHTML = '<option value="">Selecione um pet...</option>' +
             state.pets.map(p => {
                 const device = state.devices.find(d => d.id === p.device_id);
-                const deviceName = device ? ` (${device.name})` : '';
-                return `<option value="${p.id}">${getPetEmoji(p.type)} ${p.name}${deviceName}</option>`;
+                const deviceName = device ? ` (${esc(device.name)})` : '';
+                return `<option value="${p.id}">${getPetEmoji(p.type)} ${esc(p.name)}${deviceName}</option>`;
             }).join('');
     });
 
@@ -1404,7 +1445,7 @@ function updatePetSelects() {
     if (histSelect) {
         const currentValue = histSelect.value;
         histSelect.innerHTML = '<option value="">Todos os pets</option>' +
-            state.pets.map(p => `<option value="${p.id}">${p.name}</option>`).join('');
+            state.pets.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('');
         histSelect.value = currentValue;
     }
 }
@@ -1489,7 +1530,13 @@ function showToast(message, type = 'info', duration = null) {
         info: 'info-circle',
     };
 
-    toast.innerHTML = `<i class="fas fa-${icons[type]}"></i> ${message}`;
+    // A mensagem entra como TEXTO, nunca como HTML: ela carrega pet_name vindo
+    // do ESP32 e mensagens montadas pelo servidor.
+    toast.textContent = '';
+    const icon = document.createElement('i');
+    icon.className = `fas fa-${icons[type] || 'info-circle'}`;
+    toast.appendChild(icon);
+    toast.appendChild(document.createTextNode(' ' + String(message ?? '')));
     toast.className = `toast toast-${type} show`;
 
     setTimeout(() => {
@@ -1533,6 +1580,40 @@ function getTriggerLabel(trigger) {
     };
     return labels[trigger] || trigger;
 }
+
+// ===================================
+// DELEGAÇÃO DE EVENTOS
+// ===================================
+
+// Botões que precisam do NOME do pet/dispositivo usam data-action + data-id
+// em vez de interpolar o nome dentro de onclick="fn(1, 'nome')". Além de
+// eliminar a injeção, conserta o caso real de um nome com apóstrofo
+// (ex.: D'Artagnan), que antes quebrava o botão silenciosamente.
+document.addEventListener('click', (ev) => {
+    const btn = ev.target.closest('[data-action]');
+    if (!btn) return;
+
+    const id = Number(btn.dataset.id);
+    if (!Number.isFinite(id)) return;
+
+    switch (btn.dataset.action) {
+        case 'delete-pet': {
+            const pet = state.pets.find((p) => p.id === id);
+            if (pet) deletePet(pet.id, pet.name);
+            break;
+        }
+        case 'edit-device': {
+            const device = state.devices.find((d) => d.id === id);
+            if (device) showEditDeviceModal(device.id, device.name);
+            break;
+        }
+        case 'unlink-device': {
+            const device = state.devices.find((d) => d.id === id);
+            if (device) unlinkDevice(device.id, device.name);
+            break;
+        }
+    }
+});
 
 // ===================================
 // DEVICE TOKEN

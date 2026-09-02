@@ -92,9 +92,12 @@ Atrás de um proxy (ex.: Easypanel/Traefik/Nginx), aponte o domínio para a port
 ## Segurança
 
 - Segredos JWT **lidos do ambiente** (obrigatórios em produção; o servidor aborta se faltarem). Nada de segredo hardcoded.
-- Rotas do ESP32 (`/commands`, `/status`, `/schedules`, `/feed/log`) **autenticadas** por `X-Device-Secret` (segredo por dispositivo, com proteção anti-sequestro no registro).
-- `helmet` (cabeçalhos de segurança), **CORS com allowlist** (`CORS_ORIGINS`) e **rate limiting** nas rotas de autenticação.
-- Senhas com `bcrypt`; logout **revoga** o access token; container roda como usuário **não-root**.
+- Rotas do ESP32 (`/commands`, `/status`, `/schedules`, `/feed/log`) **autenticadas** por `X-Device-Secret` (segredo por dispositivo, comparado em tempo constante, com proteção anti-sequestro no registro).
+- `helmet` + **Content-Security-Policy** com `connect-src 'self'`: mesmo que algum HTML injetado execute, não consegue enviar os tokens para fora.
+- **CORS com allowlist** (`CORS_ORIGINS`) e **rate limiting** nas rotas de autenticação.
+- Todo dado exibido no dashboard passa por **escape de HTML**; dados vindos do dispositivo (nível, IP, modo) são **sanitizados na entrada**.
+- Senhas com `bcrypt`. O **logout revoga access e refresh** de uma vez (`token_version`), de forma persistente — sobrevive ao restart do servidor.
+- Validação de tipo e faixa nas rotas de escrita; container roda como usuário **não-root**.
 
 ## Limitações conhecidas / não implementado
 

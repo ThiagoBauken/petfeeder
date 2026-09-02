@@ -57,6 +57,7 @@ async function j(method, path, body, headers = {}) {
   r = await j('POST', '/api/auth/register', { name: 'User1', email, password: 'senha123' });
   ok(r.data?.success, 'registro do usuário 1');
   const token = r.data.data.accessToken;
+  const refreshToken = r.data.data.refreshToken;
   const auth = { Authorization: `Bearer ${token}` };
 
   r = await j('POST', '/api/auth/register', { name: 'User2', email: email2, password: 'senha123' });
@@ -178,11 +179,33 @@ async function j(method, path, body, headers = {}) {
     ws.on('error', () => { ok(false, 'WebSocket: erro de conexão'); clearTimeout(timer); resolve(); });
   });
 
+  section('Dados do dispositivo são sanitizados');
+  r = await j('POST', `/api/devices/${DEV_A}/status`,
+    { food_level: 999, rssi: 'abc', ip: '"><script>alert(1)</script>', mode: 'ativo!!' },
+    { 'X-Device-Secret': secretA });
+  ok(r.data?.success, 'status com valores absurdos é aceito');
+  r = await j('GET', `/api/devices/${DEV_A}/status`, undefined, auth);
+  ok(r.data?.data?.food_level === 100, 'food_level fora da faixa é limitado a 0-100');
+  ok(r.data?.data?.ip === null, 'ip em formato inválido é descartado');
+  ok(r.data?.data?.mode === 'unknown', 'mode em formato inválido vira "unknown"');
+
+  section('Cabeçalhos de segurança');
+  const headRes = await fetch(BASE + '/health');
+  const csp = headRes.headers.get('content-security-policy');
+  ok(!!csp, 'Content-Security-Policy presente');
+  ok(csp?.includes("connect-src 'self'"), "CSP restringe connect-src a 'self' (bloqueia exfiltração de token)");
+  ok(csp?.includes("object-src 'none'"), "CSP define object-src 'none'");
+
   section('Sessão');
+  r = await j('POST', '/api/auth/refresh', { refreshToken });
+  ok(r.data?.success, 'refresh funciona antes do logout');
+
   r = await j('POST', '/api/auth/logout', undefined, auth);
   ok(r.data?.success, 'logout');
   r = await j('GET', '/api/auth/me', undefined, auth);
-  ok(r.status === 401, 'token revogado após logout');
+  ok(r.status === 401, 'access token revogado após logout');
+  r = await j('POST', '/api/auth/refresh', { refreshToken });
+  ok(r.status === 401, 'refresh token TAMBÉM revogado após logout');
 
   console.log(`\n${fail === 0 ? '✅' : '❌'} RESULTADO: ${pass} passaram, ${fail} falharam\n`);
   process.exit(fail === 0 ? 0 : 1);

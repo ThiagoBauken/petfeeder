@@ -174,6 +174,10 @@ db.serialize(() => {
   db.run(`CREATE INDEX IF NOT EXISTS idx_feed_pet ON feeding_history(pet_id)`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_feed_created ON feeding_history(created_at)`);
 
+  // Versão de token por usuário: o logout incrementa e invalida access+refresh
+  db.run(`ALTER TABLE users ADD COLUMN token_version INTEGER DEFAULT 0`, () => {});
+  db.run(`UPDATE users SET token_version = 0 WHERE token_version IS NULL`);
+
   // Normaliza e-mails já gravados (o login passou a buscar sempre em minúsculo)
   db.run(`UPDATE users SET email = lower(trim(email)) WHERE email <> lower(trim(email))`);
 
@@ -197,8 +201,29 @@ db.serialize(() => {
 const app = express();
 const server = http.createServer(app);
 
-// Headers de segurança (CSP desativado: o frontend usa scripts/estilos inline + CDNs)
-app.use(helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false }));
+// Headers de segurança + Content-Security-Policy.
+// 'unsafe-inline' em script-src ainda é necessário (o dashboard usa handlers
+// onclick inline), mas o ganho principal está em connect-src 'self': mesmo que
+// algum HTML injetado consiga executar, ele não consegue ENVIAR os tokens do
+// localStorage para um domínio externo.
+app.use(helmet({
+  crossOriginEmbedderPolicy: false,
+  contentSecurityPolicy: {
+    useDefaults: false,
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'", "'unsafe-inline'"],
+      styleSrc: ["'self'", "'unsafe-inline'", 'https://cdnjs.cloudflare.com'],
+      fontSrc: ["'self'", 'data:', 'https://cdnjs.cloudflare.com'],
+      imgSrc: ["'self'", 'data:', 'https://api.qrserver.com'],
+      connectSrc: ["'self'"],
+      objectSrc: ["'none'"],
+      baseUri: ["'self'"],
+      formAction: ["'self'"],
+      frameAncestors: ["'none'"],
+    },
+  },
+}));
 
 // CORS com allowlist (sem allowlist => apenas mesma origem / ferramentas sem Origin)
 app.use(cors({
@@ -251,15 +276,23 @@ wss.on('connection', (ws) => {
 
       // Aceita 'authenticate' (frontend) e 'auth' (legado)
       if ((data.type === 'authenticate' || data.type === 'auth') && data.token) {
+        let decoded;
         try {
-          if (revokedTokens.has(data.token)) throw new Error('revogado');
-          const decoded = jwt.verify(data.token, JWT_SECRET);
+          decoded = jwt.verify(data.token, JWT_SECRET);
+        } catch (err) {
+          ws.send(JSON.stringify({ type: 'auth_error', message: 'Token inválido' }));
+          return;
+        }
+        // Respeita a versão de token: uma sessão encerrada não recebe eventos
+        checkTokenVersion(decoded, (valid) => {
+          if (!valid) {
+            ws.send(JSON.stringify({ type: 'auth_error', message: 'Sessão encerrada' }));
+            return;
+          }
           wsClients.set(decoded.userId, ws);
           ws.send(JSON.stringify({ type: 'authenticated', status: 'success' }));
           console.log(`✅ WebSocket autenticado: user ${decoded.userId}`);
-        } catch (err) {
-          ws.send(JSON.stringify({ type: 'auth_error', message: 'Token inválido' }));
-        }
+        });
       } else if (data.type === 'ping') {
         ws.send(JSON.stringify({ type: 'pong' }));
       } else if (data.type === 'subscribe') {
@@ -293,9 +326,27 @@ function sendToUser(userId, message) {
 // MIDDLEWARE DE AUTENTICAÇÃO
 // ========================================
 
-// Tokens revogados via logout (em memória — válido para 1 instância).
-// Como o access token expira em 1h, o conjunto se mantém pequeno.
-const revokedTokens = new Set();
+// Revogação de sessão por "versão de token".
+// Cada token (access E refresh) carrega o token_version do usuário no momento
+// da emissão. O logout incrementa a coluna, invalidando os dois de uma vez.
+// Antes o logout só descartava o access token numa lista em memória: o refresh
+// continuava valendo (dava para renovar a sessão depois de sair) e tudo era
+// esquecido a cada restart.
+function signTokens(user) {
+  const payload = { userId: user.id, email: user.email, tv: user.token_version || 0 };
+  return {
+    accessToken: jwt.sign(payload, JWT_SECRET, { expiresIn: '1h' }),
+    refreshToken: jwt.sign(payload, JWT_REFRESH_SECRET, { expiresIn: '7d' }),
+  };
+}
+
+// Confere se o token ainda corresponde à versão atual do usuário
+function checkTokenVersion(decoded, cb) {
+  db.get('SELECT token_version FROM users WHERE id = ?', [decoded.userId], (err, row) => {
+    if (err || !row) return cb(false);
+    cb((row.token_version || 0) === (decoded.tv || 0));
+  });
+}
 
 function authMiddleware(req, res, next) {
   const authHeader = req.headers.authorization;
@@ -306,19 +357,20 @@ function authMiddleware(req, res, next) {
 
   const token = authHeader.substring(7);
 
-  if (revokedTokens.has(token)) {
-    return res.status(401).json({ error: 'Token revogado' });
+  let decoded;
+  try {
+    decoded = jwt.verify(token, JWT_SECRET);
+  } catch (err) {
+    return res.status(401).json({ error: 'Token inválido' });
   }
 
-  try {
-    const decoded = jwt.verify(token, JWT_SECRET);
+  checkTokenVersion(decoded, (valid) => {
+    if (!valid) return res.status(401).json({ error: 'Sessão encerrada' });
     req.userId = decoded.userId;
     req.userEmail = decoded.email;
     req.accessToken = token;
     next();
-  } catch (err) {
-    return res.status(401).json({ error: 'Token inválido' });
-  }
+  });
 }
 
 // ========================================
@@ -433,8 +485,7 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
       }
 
       const userId = this.lastID;
-      const accessToken = jwt.sign({ userId, email: cleanEmail }, JWT_SECRET, { expiresIn: '1h' });
-      const refreshToken = jwt.sign({ userId, email: cleanEmail }, JWT_REFRESH_SECRET, { expiresIn: '7d' });
+      const { accessToken, refreshToken } = signTokens({ id: userId, email: cleanEmail, token_version: 0 });
 
       res.json({
         success: true,
@@ -476,8 +527,7 @@ app.post('/api/auth/login', authLimiter, (req, res) => {
         return res.status(401).json({ error: 'Credenciais inválidas' });
       }
 
-      const accessToken = jwt.sign({ userId: user.id, email: user.email }, JWT_SECRET, { expiresIn: '1h' });
-      const refreshToken = jwt.sign({ userId: user.id, email: user.email }, JWT_REFRESH_SECRET, { expiresIn: '7d' });
+      const { accessToken, refreshToken } = signTokens(user);
 
       res.json({
         success: true,
@@ -502,18 +552,26 @@ app.post('/api/auth/refresh', authLimiter, (req, res) => {
     return res.status(400).json({ error: 'Refresh token obrigatório' });
   }
 
+  let decoded;
   try {
-    const decoded = jwt.verify(refreshToken, JWT_REFRESH_SECRET);
+    decoded = jwt.verify(refreshToken, JWT_REFRESH_SECRET);
+  } catch (err) {
+    return res.status(401).json({ error: 'Refresh token inválido' });
+  }
+
+  // O refresh também respeita a versão de token: depois do logout ele não
+  // renova mais nada (antes era possível reabrir a sessão após sair).
+  checkTokenVersion(decoded, (valid) => {
+    if (!valid) return res.status(401).json({ error: 'Sessão encerrada' });
+
     const accessToken = jwt.sign(
-      { userId: decoded.userId, email: decoded.email },
+      { userId: decoded.userId, email: decoded.email, tv: decoded.tv || 0 },
       JWT_SECRET,
       { expiresIn: '1h' }
     );
 
     res.json({ success: true, data: { accessToken } });
-  } catch (err) {
-    res.status(401).json({ error: 'Refresh token inválido' });
-  }
+  });
 });
 
 // Obter usuario atual
@@ -543,10 +601,16 @@ app.get('/api/auth/device-token', authMiddleware, (req, res) => {
   });
 });
 
-// Logout (revoga o access token atual)
+// Logout: incrementa a versão de token, invalidando access E refresh de uma vez
+// (e de forma persistente — sobrevive ao restart do servidor).
 app.post('/api/auth/logout', authMiddleware, (req, res) => {
-  if (req.accessToken) revokedTokens.add(req.accessToken);
-  res.json({ success: true, message: 'Logout realizado' });
+  db.run('UPDATE users SET token_version = COALESCE(token_version, 0) + 1 WHERE id = ?', [req.userId], (err) => {
+    if (err) {
+      console.error('[LOGOUT] Erro ao revogar sessão:', err.message);
+      return res.status(500).json({ success: false, message: 'Erro ao encerrar sessão' });
+    }
+    res.json({ success: true, message: 'Logout realizado' });
+  });
 });
 
 // ========================================
@@ -1389,7 +1453,20 @@ app.get('/api/devices/:deviceId/commands', deviceAuth((r) => r.params.deviceId),
 // ESP32 envia status
 app.post('/api/devices/:deviceId/status', deviceAuth((r) => r.params.deviceId), (req, res) => {
   const deviceId = req.params.deviceId;
-  const { online, food_level, distance_cm, rssi, ip, mode, power_save_enabled, schedules_count } = req.body;
+  const raw = req.body || {};
+  const { online, distance_cm, power_save_enabled, schedules_count } = raw;
+
+  // O dispositivo é uma fonte não confiável: o nível vai para uma barra de
+  // progresso (width: N%) e o IP é exibido no dashboard. Sanitiza na entrada.
+  const clamp = (v, min, max) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? Math.max(min, Math.min(max, Math.round(n))) : null;
+  };
+  const food_level = clamp(raw.food_level, 0, 100);
+  const rssi = clamp(raw.rssi, -120, 0);
+  const ip = (typeof raw.ip === 'string' && /^[0-9]{1,3}(\.[0-9]{1,3}){3}$/.test(raw.ip)) ? raw.ip : null;
+  const mode = (typeof raw.mode === 'string' && /^[a-z_]{1,20}$/.test(raw.mode)) ? raw.mode : 'unknown';
+
   const now = new Date().toISOString();
 
   const modeNames = {

@@ -47,7 +47,14 @@ class APIClient {
           }
         }
 
-        throw new Error(result.message || 'Request failed');
+        // O backend responde ora { message }, ora { error }. Ler só "message"
+        // fazia toda falha virar "Request failed" — senha errada, horário
+        // duplicado e sessão expirada apareciam iguais para o usuário.
+        const err = new Error(
+          result.message || result.error || `Erro ${response.status}`
+        );
+        err.status = response.status;
+        throw err;
       }
 
       return result;

@@ -213,10 +213,8 @@ class WebSocketClient {
   }
 }
 
-// Create global WebSocket instance
+// Instância global do WebSocket.
+// NÃO conecta sozinho: quem conecta é connectWebSocket() no app.js, depois de
+// registrar os handlers. O auto-connect daqui criava uma SEGUNDA conexão —
+// o socket órfão ficava com onclose ativo, disparando reconexões eternas.
 const ws = new WebSocketClient(CONFIG.WS_URL);
-
-// Auto-connect if user is logged in
-if (localStorage.getItem(CONFIG.STORAGE_KEYS.ACCESS_TOKEN)) {
-  ws.connect();
-}
