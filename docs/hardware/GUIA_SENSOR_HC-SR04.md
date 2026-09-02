@@ -1,5 +1,17 @@
 # 📏 GUIA COMPLETO - Sensor HC-SR04 para PetFeeder
 
+> ## ⚠️ Atenção: a pinagem deste guia está desatualizada
+>
+> Este documento descreve um conceito antigo de **3 motores e 3 sensores** que **não
+> corresponde ao firmware atual** (que usa **1 motor e 1 sensor**). Vários pinos citados
+> aqui colidem com a função real deles no firmware — por exemplo, os GPIOs 18 e 19
+> aparecem abaixo como TRIG/ECHO do sensor, mas o firmware os dirige como **saídas do
+> motor**. Ligar o ECHO (5 V) numa saída push-pull pode danificar a placa.
+>
+> **Use a pinagem oficial: [PINAGEM.md](PINAGEM.md).**
+> O restante deste guia (materiais, montagem mecânica, alimentação, teoria) continua válido.
+
+
 ## 🎯 POR QUE O HC-SR04?
 
 O **HC-SR04** é um sensor ultrassônico que mede a distância usando ondas sonoras, perfeito para detectar o nível de ração no compartimento!

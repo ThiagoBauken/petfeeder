@@ -414,7 +414,7 @@
 
             <div class="info-box">
                 <i class="fas fa-info-circle"></i>
-                <strong>Cada compartimento usa 1 motor.</strong> Comece com 1 motor e adicione mais conforme necessidade.
+                <strong>O firmware aciona 1 motor.</strong> Se você cadastrar mais de um pet no mesmo aparelho, todos comem do mesmo funil — múltiplos compartimentos exigiriam mais motores e mudanças no firmware.
             </div>
 
             <!-- Motor 1 -->
@@ -463,101 +463,13 @@
                 </table>
             </div>
 
-            <!-- Motor 2 -->
-            <div class="motor-section optional">
-                <h3>
-                    <i class="fas fa-cog"></i>
-                    Motor 2 - Compartimento 2
-                    <span class="badge badge-optional">Opcional</span>
-                </h3>
-                <table class="pin-table">
-                    <tr>
-                        <th>ULN2003</th>
-                        <th>ESP32</th>
-                        <th>Descrição</th>
-                    </tr>
-                    <tr>
-                        <td>IN1</td>
-                        <td><span class="gpio">GPIO 25</span></td>
-                        <td>Bobina A</td>
-                    </tr>
-                    <tr>
-                        <td>IN2</td>
-                        <td><span class="gpio">GPIO 26</span></td>
-                        <td>Bobina B</td>
-                    </tr>
-                    <tr>
-                        <td>IN3</td>
-                        <td><span class="gpio">GPIO 27</span></td>
-                        <td>Bobina C</td>
-                    </tr>
-                    <tr>
-                        <td>IN4</td>
-                        <td><span class="gpio">GPIO 32</span></td>
-                        <td>Bobina D</td>
-                    </tr>
-                    <tr>
-                        <td>VCC</td>
-                        <td><span class="gpio">5V</span></td>
-                        <td>Alimentação motor</td>
-                    </tr>
-                    <tr>
-                        <td>GND</td>
-                        <td><span class="gpio">GND</span></td>
-                        <td>Terra comum</td>
-                    </tr>
-                </table>
-            </div>
-
-            <!-- Motor 3 -->
-            <div class="motor-section optional">
-                <h3>
-                    <i class="fas fa-cog"></i>
-                    Motor 3 - Compartimento 3
-                    <span class="badge badge-optional">Opcional</span>
-                </h3>
-                <table class="pin-table">
-                    <tr>
-                        <th>ULN2003</th>
-                        <th>ESP32</th>
-                        <th>Descrição</th>
-                    </tr>
-                    <tr>
-                        <td>IN1</td>
-                        <td><span class="gpio">GPIO 12</span></td>
-                        <td>Bobina A</td>
-                    </tr>
-                    <tr>
-                        <td>IN2</td>
-                        <td><span class="gpio">GPIO 13</span></td>
-                        <td>Bobina B</td>
-                    </tr>
-                    <tr>
-                        <td>IN3</td>
-                        <td><span class="gpio">GPIO 14</span></td>
-                        <td>Bobina C</td>
-                    </tr>
-                    <tr>
-                        <td>IN4</td>
-                        <td><span class="gpio">GPIO 15</span></td>
-                        <td>Bobina D</td>
-                    </tr>
-                    <tr>
-                        <td>VCC</td>
-                        <td><span class="gpio">5V</span></td>
-                        <td>Alimentação motor</td>
-                    </tr>
-                    <tr>
-                        <td>GND</td>
-                        <td><span class="gpio">GND</span></td>
-                        <td>Terra comum</td>
-                    </tr>
-                </table>
-            </div>
-
-            <div class="warning-box">
-                <i class="fas fa-exclamation-triangle"></i>
-                <strong>Atenção:</strong> GPIO 12 pode causar problemas no boot se estiver HIGH. Certifique-se de que o motor está em LOW ao iniciar.
+            <div class="info-box">
+                <i class="fas fa-info-circle"></i>
+                <strong>O firmware atual aciona um único motor.</strong>
+                As tabelas de "Motor 2" e "Motor 3" foram removidas desta página porque
+                não existiam no firmware e os pinos que elas indicavam (GPIO 25/26)
+                são justamente os do sensor. A pinagem oficial está em
+                <code>docs/hardware/PINAGEM.md</code>.
             </div>
         </div>
 
@@ -696,26 +608,21 @@
                               │    DevKitC       │
                               │                  │
     ┌──────────┐              │  GPIO 16 ────────┼──── IN1 ┐
-    │ HC-SR04  │              │  GPIO 17 ────────┼──── IN2 │ Motor 1
-    │          │              │  GPIO 18 ────────┼──── IN3 │ ULN2003
+    │ HC-SR04  │              │  GPIO 17 ────────┼──── IN2 │ Motor 28BYJ-48
+    │          │              │  GPIO 18 ────────┼──── IN3 │ via ULN2003
     │ VCC ─────┼── 5V ────────┤  GPIO 19 ────────┼──── IN4 ┘
     │ GND ─────┼── GND ───────┤                  │
-    │ TRIG ────┼─────────────→│  GPIO 23         │     ┌── 5V
-    │ ECHO ────┼─────────────→│  GPIO 22         │     │
-    └──────────┘              │                  │     ▼
-                              │  GPIO 25 ────────┼──── IN1 ┐
-                              │  GPIO 26 ────────┼──── IN2 │ Motor 2
-                              │  GPIO 27 ────────┼──── IN3 │ (opcional)
-                              │  GPIO 32 ────────┼──── IN4 ┘
-                              │                  │
-                              │  GPIO 12 ────────┼──── IN1 ┐
-                              │  GPIO 13 ────────┼──── IN2 │ Motor 3
-                              │  GPIO 14 ────────┼──── IN3 │ (opcional)
-                              │  GPIO 15 ────────┼──── IN4 ┘
-                              │                  │
-                              │  5V ─────────────┼───────── VCC (todos)
-                              │  GND ────────────┼───────── GND (todos)
-                              └──────────────────┘
+    │ TRIG ────┼─────────────→│  GPIO 26         │
+    │          │              │                  │
+    │ ECHO ────┼──[1kΩ]──┬───→│  GPIO 25         │
+    └──────────┘         │    │                  │
+                       [2kΩ]  │  5V ─────────────┼──── VCC (ULN2003 e sensor)
+                         │    │  GND ────────────┼──── GND (comum a tudo)
+                        GND   └──────────────────┘
+
+    O ECHO do HC-SR04 devolve 5 V e a entrada do ESP32 tolera 3,3 V.
+    O divisor 1kΩ / 2kΩ acima é obrigatório. O TRIG é saída do ESP32
+    e não precisa de divisor.
             </div>
         </div>
 

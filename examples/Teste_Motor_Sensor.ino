@@ -27,8 +27,8 @@
 #define MOTOR_IN4 19
 
 // Pinos do Sensor
-#define TRIG_PIN 23
-#define ECHO_PIN 22
+#define TRIG_PIN 26   // mesma pinagem do firmware (docs/hardware/PINAGEM.md)
+#define ECHO_PIN 25   // usar divisor de tensao: ECHO do HC-SR04 e 5V
 
 // LED
 #define LED_PIN 2

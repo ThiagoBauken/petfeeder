@@ -85,7 +85,7 @@ Atrás de um proxy (ex.: Easypanel/Traefik/Nginx), aponte o domínio para a port
 3. Informe a rede WiFi e o **e-mail da sua conta** no PetFeeder. O aparelho se registra sozinho e recebe um segredo.
 4. No painel, crie o pet, vincule ao dispositivo e configure os horários.
 
-> Antes de gravar, ajuste no firmware os pinos e a calibração conforme `docs/hardware/` (motor, sensor e gramas por dose).
+> Antes de gravar, confira a [pinagem oficial](docs/hardware/PINAGEM.md) e ajuste a calibração das doses ([`GUIA_CALIBRACAO.md`](docs/hardware/GUIA_CALIBRACAO.md)).
 
 ---
 
@@ -119,7 +119,16 @@ O `auto-register` é autenticado apenas pelo **e-mail da conta**. Quem souber o 
 
 ## Hardware
 
-Guias completos de componentes, fiação, alimentação elétrica, sensor, motor e calibração estão em [`docs/hardware/`](docs/hardware/).
+**Comece pela [pinagem oficial](docs/hardware/PINAGEM.md)** — é a única fonte de verdade sobre onde ligar cada fio, derivada direto do firmware. Ela também explica o **divisor de tensão obrigatório** no pino ECHO (o HC-SR04 devolve 5 V; a entrada do ESP32 tolera 3,3 V).
+
+| Componente | Pinos |
+|---|---|
+| Motor 28BYJ-48 (ULN2003) | GPIO 16, 17, 18, 19 |
+| Sensor HC-SR04 | TRIG 26, ECHO 25 |
+| LED de status | GPIO 2 |
+| Botão de reset (BOOT) | GPIO 0 |
+
+Os demais guias (componentes, alimentação elétrica, calibração, bateria) estão em [`docs/hardware/`](docs/hardware/). Atenção: `GUIA_HARDWARE_COMPLETO`, `GUIA_SENSOR_HC-SR04` e `GUIA_MOTOR_28BYJ48` descrevem um conceito antigo de 3 motores e **têm pinagem divergente** — cada um traz um aviso no topo; siga sempre a `PINAGEM.md`.
 
 ## Licença
 

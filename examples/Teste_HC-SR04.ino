@@ -16,8 +16,8 @@
 // ========================================
 
 // Sensor 1 (Compartimento 1)
-const int SENSOR1_TRIG = 19;
-const int SENSOR1_ECHO = 18;
+const int SENSOR1_TRIG = 26;  // pinagem oficial do firmware (docs/hardware/PINAGEM.md)
+const int SENSOR1_ECHO = 25;  // usar divisor de tensao: ECHO e 5V
 
 // Sensor 2 (Compartimento 2)
 const int SENSOR2_TRIG = 23;
