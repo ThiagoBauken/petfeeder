@@ -97,11 +97,14 @@ RTC_DATA_ATTR int bootCount = 0;
 RTC_DATA_ATTR bool deviceRegistered = false;
 RTC_DATA_ATTR int lastExecutionDay = -1;        // Dia do mês da última execução
 
-// Array para rastrear horários executados hoje (até 40 slots)
-// Formato: hora*60 + minuto (ex: 00:09 = 9, 14:30 = 870)
-// Usar valor 0xFFFF para indicar slot vazio
-RTC_DATA_ATTR uint16_t executedTimes[40];       // Horários já executados hoje (minutos desde meia-noite)
-RTC_DATA_ATTR uint8_t executedCount = 0;        // Quantos foram executados hoje
+// Trava anti-reexecução do dia.
+// Guarda o ID do horário (vindo do servidor), NAO hora*60+minuto: dois pets
+// podem ter horários no MESMO minuto e um não pode anular o outro.
+// O mesmo limite vale para o array e para o contador — quando enche, o mais
+// antigo é descartado; a trava NUNCA pode simplesmente parar de marcar.
+#define MAX_EXECUTED_SCHEDULES 40
+RTC_DATA_ATTR uint16_t executedIds[MAX_EXECUTED_SCHEDULES];  // IDs já executados hoje
+RTC_DATA_ATTR uint8_t executedCount = 0;                     // Quantos foram executados hoje
 
 // Tempo offline (sobrevive ao Deep Sleep)
 RTC_DATA_ATTR time_t lastSyncedTime = 0;       // Última hora sincronizada (epoch)
@@ -129,6 +132,7 @@ PendingFeed pendingFeeds[MAX_PENDING_FEEDS];
 int pendingFeedCount = 0;
 
 struct Schedule {
+  uint16_t id;   // ID do horário no servidor (chave da trava anti-reexecução)
   int hour;
   int minute;
   int doseSize;
@@ -176,6 +180,10 @@ void addPendingFeed(int doseSize, const char* petName, const char* trigger = "sc
 void sendPendingFeeds();
 void saveTimeToFlash();
 void loadTimeFromFlash();
+void saveExecutedToFlash();
+void loadExecutedFromFlash();
+bool wasScheduleExecutedToday(uint16_t scheduleId);
+void markScheduleExecuted(uint16_t scheduleId);
 void setStep(int a, int b, int c, int d);
 void stopMotor();
 void setupPins();
@@ -448,14 +456,18 @@ void loadConfig() {
     schedules[i].doseSize = preferences.getInt((key + "d").c_str(), 2);
     schedules[i].active = preferences.getBool((key + "a").c_str(), true);
     schedules[i].days = preferences.getUChar((key + "w").c_str(), 0x7F);  // Todos os dias
+    // ID do horário (fallback para hora*60+min em bancos gravados antes disso)
+    schedules[i].id = preferences.getUShort((key + "i").c_str(),
+                                            (uint16_t)(schedules[i].hour * 60 + schedules[i].minute));
     String petName = preferences.getString((key + "p").c_str(), "Pet");
     strncpy(schedules[i].petName, petName.c_str(), 31);
     schedules[i].petName[31] = '\0';
   }
 
-  // Carrega tempo salvo e alimentacoes pendentes
+  // Carrega tempo salvo, alimentacoes pendentes e a trava de execucoes do dia
   loadTimeFromFlash();
   loadPendingFeedsFromFlash();
+  loadExecutedFromFlash();
 
   Serial.println("\n[CONFIG] Carregado:");
   Serial.printf("  SSID: %s\n", savedSSID.length() > 0 ? savedSSID.c_str() : "(vazio)");
@@ -488,6 +500,7 @@ void saveSchedulesToFlash() {
     preferences.putInt((key + "d").c_str(), schedules[i].doseSize);
     preferences.putBool((key + "a").c_str(), schedules[i].active);
     preferences.putUChar((key + "w").c_str(), schedules[i].days);
+    preferences.putUShort((key + "i").c_str(), schedules[i].id);       // ID (chave da trava)
     preferences.putString((key + "p").c_str(), schedules[i].petName);  // Salva nome do pet
   }
   Serial.printf("[CONFIG] %d horarios salvos na flash (powerSave=%s)\n",
@@ -817,7 +830,8 @@ void sendFeedingLog(int doseSize, const char* petName, const char* trigger) {
   } else {
     Serial.printf("[LOG] ERRO ao registrar: HTTP %d - adicionando a fila\n", httpCode);
     // Se falhou, adiciona a fila para tentar novamente depois
-    addPendingFeed(doseSize, petName);
+    // (repassando o trigger: sem isso um feed de botao virava "scheduled")
+    addPendingFeed(doseSize, petName, trigger);
   }
   http.end();
 }
@@ -862,6 +876,12 @@ bool fetchSchedules() {
       for (JsonObject item : data) {
         if (scheduleCount >= 40) break;
 
+        // ID do horário no servidor: chave da trava anti-reexecução.
+        // Fallback para hora*60+min caso um servidor antigo não envie o id.
+        schedules[scheduleCount].id = item["id"].isNull()
+          ? (uint16_t)(((int)item["hour"]) * 60 + ((int)item["minute"]))
+          : (uint16_t)(item["id"].as<unsigned int>());
+
         schedules[scheduleCount].hour = item["hour"];
         schedules[scheduleCount].minute = item["minute"];
 
@@ -887,8 +907,9 @@ bool fetchSchedules() {
         strncpy(schedules[scheduleCount].petName, pet, 31);
         schedules[scheduleCount].petName[31] = '\0';
 
-        Serial.printf("  [%d] %02d:%02d %s dose=%d dias=0x%02X\n",
+        Serial.printf("  [%d] id=%u %02d:%02d %s dose=%d dias=0x%02X\n",
           scheduleCount + 1,
+          schedules[scheduleCount].id,
           schedules[scheduleCount].hour,
           schedules[scheduleCount].minute,
           schedules[scheduleCount].petName,
@@ -1090,37 +1111,66 @@ bool estimateOfflineTime(struct tm* timeinfo) {
 
 // ==================== VERIFICACAO DE HORARIOS ====================
 
-// Verifica se um horário já foi executado hoje (por hora:minuto, não por índice)
-bool wasTimeExecutedToday(int hour, int minute) {
-  uint16_t timeKey = hour * 60 + minute;
-  for (int i = 0; i < executedCount && i < 40; i++) {
-    if (executedTimes[i] == timeKey) {
+// Persiste a trava na flash (NVS).
+// A trava vivia só em RTC RAM: sobrevivia ao deep sleep, mas NAO a uma queda
+// de energia. Uma piscada de luz logo apos alimentar fazia o horario cair de
+// novo na janela de recuperacao e o pet comia duas vezes.
+void saveExecutedToFlash() {
+  preferences.putInt("execDay", lastExecutionDay);
+  preferences.putUChar("execCount", executedCount);
+  preferences.putBytes("execIds", executedIds, sizeof(executedIds));
+}
+
+void loadExecutedFromFlash() {
+  int savedDay = preferences.getInt("execDay", -1);
+  uint8_t savedCount = preferences.getUChar("execCount", 0);
+  if (savedDay < 0 || savedCount == 0) return;
+  if (savedCount > MAX_EXECUTED_SCHEDULES) savedCount = MAX_EXECUTED_SCHEDULES;
+
+  size_t len = preferences.getBytes("execIds", executedIds, sizeof(executedIds));
+  if (len != sizeof(executedIds)) return;  // dado incompleto: ignora
+
+  lastExecutionDay = savedDay;
+  executedCount = savedCount;
+  Serial.printf("[EXEC] Trava restaurada da flash: dia %d, %d execucoes\n", savedDay, savedCount);
+}
+
+// Verifica se um horário já foi executado hoje (pelo ID do horário)
+bool wasScheduleExecutedToday(uint16_t scheduleId) {
+  for (int i = 0; i < executedCount && i < MAX_EXECUTED_SCHEDULES; i++) {
+    if (executedIds[i] == scheduleId) {
       return true;
     }
   }
   return false;
 }
 
-// Marca um horário como executado hoje
-void markTimeAsExecuted(int hour, int minute) {
-  if (executedCount >= 16) {
-    Serial.println("[AVISO] Limite de 16 execucoes/dia atingido!");
-    return;
+// Marca um horário como executado hoje.
+// Ao encher, descarta o MAIS ANTIGO em vez de parar de marcar — se a trava
+// deixasse de registrar, o mesmo horario dispararia repetidamente na janela.
+void markScheduleExecuted(uint16_t scheduleId) {
+  if (executedCount >= MAX_EXECUTED_SCHEDULES) {
+    for (int i = 0; i < MAX_EXECUTED_SCHEDULES - 1; i++) {
+      executedIds[i] = executedIds[i + 1];
+    }
+    executedCount = MAX_EXECUTED_SCHEDULES - 1;
+    Serial.println("[EXEC] Limite atingido: descartando a marcacao mais antiga");
   }
-  uint16_t timeKey = hour * 60 + minute;
-  executedTimes[executedCount] = timeKey;
+  executedIds[executedCount] = scheduleId;
   executedCount++;
-  Serial.printf("[EXEC] Marcado %02d:%02d como executado (total: %d)\n", hour, minute, executedCount);
+  saveExecutedToFlash();
+  Serial.printf("[EXEC] Horario id=%u marcado como executado (total: %d)\n", scheduleId, executedCount);
 }
 
 // Reseta as execuções para novo dia
 void resetDailyExecutions(int dayOfMonth) {
   Serial.printf("[HORARIOS] Novo dia (%d), resetando execucoes\n", dayOfMonth);
-  for (int i = 0; i < 40; i++) {
-    executedTimes[i] = 0xFFFF;  // Marca como vazio
+  for (int i = 0; i < MAX_EXECUTED_SCHEDULES; i++) {
+    executedIds[i] = 0xFFFF;  // Marca como vazio
   }
   executedCount = 0;
   lastExecutionDay = dayOfMonth;
+  saveExecutedToFlash();
 }
 
 void checkScheduledFeeding() {
@@ -1165,10 +1215,12 @@ void checkScheduledFeeding() {
       continue;
     }
 
-    // Verifica se este horário específico já foi executado hoje (usando hora:minuto, não índice!)
-    if (wasTimeExecutedToday(schedules[i].hour, schedules[i].minute)) {
-      Serial.printf("  [%d] %02d:%02d %s -> JA EXECUTADO HOJE\n",
-                    i, schedules[i].hour, schedules[i].minute, schedules[i].petName);
+    // Verifica se este horário específico já foi executado hoje.
+    // A chave é o ID do horário: dois pets podem ter horários no mesmo minuto
+    // e cada um precisa da própria marcação.
+    if (wasScheduleExecutedToday(schedules[i].id)) {
+      Serial.printf("  [%d] %02d:%02d %s (id=%u) -> JA EXECUTADO HOJE\n",
+                    i, schedules[i].hour, schedules[i].minute, schedules[i].petName, schedules[i].id);
       continue;
     }
 
@@ -1197,8 +1249,10 @@ void checkScheduledFeeding() {
                     schedules[i].petName, schedules[i].hour, schedules[i].minute,
                     schedules[i].doseSize == 1 ? "Pequena" : schedules[i].doseSize == 3 ? "Grande" : "Media");
 
-      // Marca como executado ANTES de dispensar (evita duplicação)
-      markTimeAsExecuted(schedules[i].hour, schedules[i].minute);
+      // Marca como executado ANTES de dispensar (evita duplicação).
+      // Já persiste na flash, então uma queda de energia no meio não faz o
+      // horário ser executado de novo no próximo boot.
+      markScheduleExecuted(schedules[i].id);
 
       dispense(schedules[i].doseSize);
       sendFeedingLog(schedules[i].doseSize, schedules[i].petName);  // Envia nome do pet
@@ -1864,6 +1918,7 @@ void loop() {
 
       sendStatus();
       checkCommands();
+      if (pendingFeedCount > 0) sendPendingFeeds();
     }
     return;
   }
@@ -1896,6 +1951,11 @@ void loop() {
       Serial.println("[POLL] Verificando comandos...");
 
       checkCommands();
+
+      // Reenvia alimentacoes feitas offline. O modo ativo e o padrao
+      // (powerSave=false), e antes so o boot/deep-sleep esvaziava a fila —
+      // com o servidor fora do ar, os registros eram perdidos em silencio.
+      if (pendingFeedCount > 0) sendPendingFeeds();
 
       // Sync periodico (a cada 5 min)
       static int pollCount = 0;

@@ -54,6 +54,17 @@ npm run dev        # ou: npm start
 
 Acesse `http://localhost:3000`. Em dev o banco é em memória (`:memory:`) por padrão — defina `DB_PATH` para persistir.
 
+### Testes
+
+Com o servidor rodando em outro terminal:
+
+```bash
+cd backend
+npm test
+```
+
+São testes de integração contra a API real (37 asserções): autenticação, isolamento entre contas, autenticação de dispositivo por `X-Device-Secret`, isolamento de horários por dispositivo, validação de entrada, fila de comandos e WebSocket.
+
 ## Rodando com Docker (produção)
 
 ```bash
@@ -93,7 +104,15 @@ Para evitar a inflação do README antigo, o que **não** existe hoje (e poderia
 - A **fila de comandos** ao ESP32 é em memória (some se o backend reiniciar) — adequada a uma única instância; os dados (usuários, pets, horários, histórico, nível) ficam no SQLite.
 - As **gramas por dose** (50/100/150 g) são valores de calibração padrão; ajuste em `docs/hardware/GUIA_CALIBRACAO.md`.
 - O firmware usa `setInsecure()` no cliente HTTPS (não valida o certificado do servidor). Para endurecer, embarque a CA raiz do seu provedor.
-- Não há suíte de testes automatizados no repositório.
+- A URL do servidor está fixa no firmware (`PetFeeder_WiFiSetup.ino`, constante `serverUrl`) — **edite antes de gravar** se você subir a sua própria instância.
+- Os testes cobrem a API por integração; **não há** testes unitários, de frontend nem do firmware.
+- `PRAGMA foreign_keys` não é ligado: apagar um dispositivo ainda deixa horários/histórico órfãos.
+- **Multi-pet por dispositivo**: o campo "compartimento" existe no cadastro, mas o firmware aciona um único motor — dois pets no mesmo aparelho comem do mesmo funil.
+- A dispensa (`dispense()`) é bloqueante (até ~22 s na dose grande) e não há watchdog no firmware.
+
+### Escolha do dispositivo e segurança do pareamento
+
+O `auto-register` é autenticado apenas pelo **e-mail da conta**. Quem souber o e-mail e o `device_id` consegue parear um aparelho na conta. Re-vincular um dispositivo já pareado **para outra conta** exige o segredo correto, mas o primeiro pareamento não tem segundo fator. Um código de pareamento de uso único resolveria isso.
 
 ## Hardware
 

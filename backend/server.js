@@ -165,6 +165,28 @@ db.serialize(() => {
   db.run(`ALTER TABLE devices ADD COLUMN ip_address TEXT`, () => {});
   db.run(`ALTER TABLE devices ADD COLUMN rssi INTEGER`, () => {});
 
+  // Índices para as colunas usadas em WHERE/JOIN das rotas quentes
+  db.run(`CREATE INDEX IF NOT EXISTS idx_devices_user ON devices(user_id)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_pets_user ON pets(user_id)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_pets_device ON pets(device_id)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_sched_pet ON schedules(pet_id)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_sched_device ON schedules(device_id)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_feed_pet ON feeding_history(pet_id)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_feed_created ON feeding_history(created_at)`);
+
+  // Normaliza e-mails já gravados (o login passou a buscar sempre em minúsculo)
+  db.run(`UPDATE users SET email = lower(trim(email)) WHERE email <> lower(trim(email))`);
+
+  // Backfill: todo dispositivo precisa de segredo — sem ele as rotas do ESP32
+  // agora respondem 401 (não há mais liberação por compatibilidade).
+  db.all(`SELECT id FROM devices WHERE device_secret IS NULL OR device_secret = ''`, (err, rows) => {
+    if (err || !rows || rows.length === 0) return;
+    rows.forEach((row) => {
+      db.run(`UPDATE devices SET device_secret = ? WHERE id = ?`, [generateDeviceSecret(), row.id]);
+    });
+    console.log(`🔑 Backfill: segredo gerado para ${rows.length} dispositivo(s) sem segredo`);
+  });
+
   console.log('✅ Tabelas verificadas/criadas');
 });
 
@@ -308,21 +330,60 @@ function generateDeviceSecret() {
   return crypto.randomBytes(24).toString('hex');
 }
 
+// Formato aceito de device_id (o firmware gera "PF_" + 6 hex)
+const DEVICE_ID_RE = /^[A-Za-z0-9_-]{3,64}$/;
+
+const WEEKDAYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+
+// Normaliza os dias da semana vindos do cliente.
+// Aceita tanto { days: { monday: true, ... } } quanto os sete booleanos soltos
+// no corpo (formato que o modal de edição envia). Retorna null se nenhum dia
+// foi marcado — nesse caso o campo simplesmente não é atualizado.
+function normalizeDays(body) {
+  if (!body || typeof body !== 'object') return null;
+  const base = (body.days && typeof body.days === 'object' && !Array.isArray(body.days))
+    ? body.days
+    : body;
+  const out = {};
+  let any = false;
+  for (const d of WEEKDAYS) {
+    out[d] = base[d] === true || base[d] === 1 || base[d] === 'true';
+    if (out[d]) any = true;
+  }
+  return any ? out : null;
+}
+
+function isInt(value, min, max) {
+  return Number.isInteger(value) && value >= min && value <= max;
+}
+
+// Comparação em tempo constante (evita timing attack na checagem do segredo)
+function secretsMatch(provided, stored) {
+  if (typeof provided !== 'string' || typeof stored !== 'string') return false;
+  const a = Buffer.from(provided, 'utf8');
+  const b = Buffer.from(stored, 'utf8');
+  if (a.length !== b.length) return false;
+  return crypto.timingSafeEqual(a, b);
+}
+
 // Valida o header X-Device-Secret contra o segredo salvo do dispositivo.
 // deviceIdGetter extrai o device_id da requisição (params ou body).
 function deviceAuth(deviceIdGetter) {
   return (req, res, next) => {
     const deviceId = deviceIdGetter(req);
-    if (!deviceId) {
-      return res.status(400).json({ success: false, message: 'device_id ausente' });
+    if (typeof deviceId !== 'string' || !DEVICE_ID_RE.test(deviceId)) {
+      return res.status(400).json({ success: false, message: 'device_id ausente ou inválido' });
     }
     const provided = req.get('X-Device-Secret') || (req.body && req.body.device_secret) || req.query.s;
     db.get('SELECT device_secret FROM devices WHERE device_id = ?', [deviceId], (err, row) => {
       if (err) return res.status(500).json({ success: false, message: 'Erro interno' });
       if (!row) return res.status(404).json({ success: false, message: 'Dispositivo não registrado' });
-      // Dispositivo ainda sem segredo (legado): será emitido no próximo auto-register
-      if (!row.device_secret) return next();
-      if (provided && provided === row.device_secret) return next();
+      // Sem segredo o dispositivo NÃO é autenticado (nada de liberar por compatibilidade):
+      // todo device recebe segredo ao ser criado/vinculado e no backfill de inicialização.
+      if (!row.device_secret) {
+        return res.status(401).json({ success: false, message: 'Dispositivo sem segredo — refaça o pareamento' });
+      }
+      if (secretsMatch(provided, row.device_secret)) return next();
       return res.status(401).json({ success: false, message: 'Device secret inválido' });
     });
   };
@@ -334,21 +395,35 @@ function deviceAuth(deviceIdGetter) {
 
 // Registrar
 app.post('/api/auth/register', authLimiter, async (req, res) => {
-  const { name, email, password } = req.body;
+  const { name, email, password } = req.body || {};
 
-  if (!name || !email || !password) {
-    return res.status(400).json({ error: 'Dados incompletos' });
+  // Checagem de TIPO antes de qualquer uso: um password numérico fazia o
+  // bcrypt rejeitar dentro do handler async e derrubava o processo.
+  if (typeof name !== 'string' || typeof email !== 'string' || typeof password !== 'string') {
+    return res.status(400).json({ error: 'Dados incompletos ou inválidos' });
   }
 
+  const cleanName = name.trim();
+  const cleanEmail = email.trim().toLowerCase();
+
+  if (!cleanName || !cleanEmail) {
+    return res.status(400).json({ error: 'Nome e email são obrigatórios' });
+  }
   if (password.length < 6) {
     return res.status(400).json({ error: 'Senha deve ter no mínimo 6 caracteres' });
   }
 
-  const passwordHash = await bcrypt.hash(password, 10);
+  let passwordHash;
+  try {
+    passwordHash = await bcrypt.hash(password, 10);
+  } catch (e) {
+    console.error('Erro ao gerar hash da senha:', e.message);
+    return res.status(500).json({ error: 'Erro ao criar usuário' });
+  }
 
   db.run(
     'INSERT INTO users (name, email, password_hash) VALUES (?, ?, ?)',
-    [name, email, passwordHash],
+    [cleanName, cleanEmail, passwordHash],
     function(err) {
       if (err) {
         if (err.message.includes('UNIQUE')) {
@@ -358,15 +433,15 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
       }
 
       const userId = this.lastID;
-      const accessToken = jwt.sign({ userId, email }, JWT_SECRET, { expiresIn: '1h' });
-      const refreshToken = jwt.sign({ userId, email }, JWT_REFRESH_SECRET, { expiresIn: '7d' });
+      const accessToken = jwt.sign({ userId, email: cleanEmail }, JWT_SECRET, { expiresIn: '1h' });
+      const refreshToken = jwt.sign({ userId, email: cleanEmail }, JWT_REFRESH_SECRET, { expiresIn: '7d' });
 
       res.json({
         success: true,
         data: {
           accessToken,
           refreshToken,
-          user: { id: userId, name, email, plan: 'free' }
+          user: { id: userId, name: cleanName, email: cleanEmail, plan: 'free' }
         }
       });
     }
@@ -375,38 +450,47 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
 
 // Login
 app.post('/api/auth/login', authLimiter, (req, res) => {
-  const { email, password } = req.body;
+  const { email, password } = req.body || {};
 
-  if (!email || !password) {
+  // Checagem de TIPO: sem isso um password não-string rejeitava no bcrypt
+  // dentro do callback async e encerrava o processo.
+  if (typeof email !== 'string' || typeof password !== 'string' || !email || !password) {
     return res.status(400).json({ error: 'Email e senha obrigatórios' });
   }
 
-  db.get('SELECT * FROM users WHERE email = ?', [email], async (err, user) => {
-    if (err) {
-      return res.status(500).json({ error: 'Erro ao buscar usuário' });
-    }
+  const cleanEmail = email.trim().toLowerCase();
 
-    if (!user) {
-      return res.status(401).json({ error: 'Credenciais inválidas' });
-    }
-
-    const validPassword = await bcrypt.compare(password, user.password_hash);
-
-    if (!validPassword) {
-      return res.status(401).json({ error: 'Credenciais inválidas' });
-    }
-
-    const accessToken = jwt.sign({ userId: user.id, email: user.email }, JWT_SECRET, { expiresIn: '1h' });
-    const refreshToken = jwt.sign({ userId: user.id, email: user.email }, JWT_REFRESH_SECRET, { expiresIn: '7d' });
-
-    res.json({
-      success: true,
-      data: {
-        accessToken,
-        refreshToken,
-        user: { id: user.id, name: user.name, email: user.email, plan: 'free' }
+  db.get('SELECT * FROM users WHERE email = ?', [cleanEmail], async (err, user) => {
+    try {
+      if (err) {
+        return res.status(500).json({ error: 'Erro ao buscar usuário' });
       }
-    });
+
+      if (!user) {
+        return res.status(401).json({ error: 'Credenciais inválidas' });
+      }
+
+      const validPassword = await bcrypt.compare(password, user.password_hash);
+
+      if (!validPassword) {
+        return res.status(401).json({ error: 'Credenciais inválidas' });
+      }
+
+      const accessToken = jwt.sign({ userId: user.id, email: user.email }, JWT_SECRET, { expiresIn: '1h' });
+      const refreshToken = jwt.sign({ userId: user.id, email: user.email }, JWT_REFRESH_SECRET, { expiresIn: '7d' });
+
+      res.json({
+        success: true,
+        data: {
+          accessToken,
+          refreshToken,
+          user: { id: user.id, name: user.name, email: user.email, plan: 'free' }
+        }
+      });
+    } catch (e) {
+      console.error('Erro no login:', e.message);
+      return res.status(500).json({ error: 'Erro interno' });
+    }
   });
 });
 
@@ -520,19 +604,23 @@ function formatTimeAgo(ms) {
   return `há ${days}d`;
 }
 
-// Vincular dispositivo
+// Vincular dispositivo (pelo dashboard). Já nasce COM segredo — sem isso o
+// dispositivo ficaria sem autenticação nas rotas do ESP32.
 app.post('/api/devices/link', authMiddleware, (req, res) => {
-  const { deviceId, name } = req.body;
+  const { deviceId, name } = req.body || {};
 
-  if (!deviceId) {
-    return res.status(400).json({ success: false, message: 'deviceId obrigatório' });
+  if (typeof deviceId !== 'string' || !DEVICE_ID_RE.test(deviceId)) {
+    return res.status(400).json({ success: false, message: 'deviceId ausente ou inválido' });
   }
 
-  const deviceName = name || `PetFeeder ${deviceId.slice(-6)}`;
+  const deviceName = (typeof name === 'string' && name.trim())
+    ? name.trim().slice(0, 60)
+    : `PetFeeder ${deviceId.slice(-6)}`;
+  const secret = generateDeviceSecret();
 
   db.run(
-    'INSERT INTO devices (user_id, device_id, name, status) VALUES (?, ?, ?, ?)',
-    [req.userId, deviceId, deviceName, 'online'],
+    'INSERT INTO devices (user_id, device_id, name, status, device_secret) VALUES (?, ?, ?, ?, ?)',
+    [req.userId, deviceId, deviceName, 'offline', secret],
     function(err) {
       if (err) {
         if (err.message.includes('UNIQUE')) {
@@ -547,7 +635,8 @@ app.post('/api/devices/link', authMiddleware, (req, res) => {
           id: this.lastID,
           device_id: deviceId,
           name: deviceName,
-          status: 'online'
+          status: 'offline',
+          device_secret: secret
         }
       });
     }
@@ -558,28 +647,33 @@ app.post('/api/devices/link', authMiddleware, (req, res) => {
 // Emite/retorna um device_secret que o ESP32 deve guardar e enviar (X-Device-Secret)
 // em todas as chamadas seguintes (/commands, /status, /schedules, /feed/log).
 app.post('/api/devices/auto-register', authLimiter, (req, res) => {
-  const { deviceId, email, name } = req.body;
-  const providedSecret = req.get('X-Device-Secret') || req.body.device_secret;
+  const { deviceId, email } = req.body || {};
+  const providedSecret = req.get('X-Device-Secret') || (req.body && req.body.device_secret);
 
-  if (!deviceId || !email) {
-    return res.status(400).json({ success: false, message: 'deviceId e email obrigatórios' });
+  if (typeof deviceId !== 'string' || !DEVICE_ID_RE.test(deviceId)) {
+    return res.status(400).json({ success: false, message: 'deviceId ausente ou inválido' });
+  }
+  if (typeof email !== 'string' || !email.trim()) {
+    return res.status(400).json({ success: false, message: 'email obrigatório' });
   }
 
-  db.get('SELECT id FROM users WHERE email = ?', [email.toLowerCase()], (err, user) => {
+  // O nome NUNCA vem do corpo: esta rota é pública, então texto arbitrário aqui
+  // acabaria renderizado no dashboard. Deriva sempre do próprio deviceId.
+  const deviceName = `PetFeeder ${deviceId.slice(-6)}`;
+
+  db.get('SELECT id FROM users WHERE email = ?', [email.trim().toLowerCase()], (err, user) => {
     if (err) return res.status(500).json({ success: false, message: 'Erro no servidor' });
     if (!user) {
       return res.status(404).json({ success: false, message: 'Email não encontrado. Crie uma conta primeiro no site.' });
     }
 
-    const deviceName = name || `PetFeeder ${deviceId.slice(-6)}`;
-
     db.get('SELECT id, user_id, device_secret FROM devices WHERE device_id = ?', [deviceId], (err2, existing) => {
       if (err2) return res.status(500).json({ success: false, message: 'Erro no servidor' });
 
       if (existing) {
-        // Anti-sequestro: dispositivo já com segredo e de OUTRA conta só re-vincula
-        // se o segredo correto for fornecido (o dono legítimo o tem salvo no ESP32).
-        if (existing.device_secret && existing.user_id !== user.id && providedSecret !== existing.device_secret) {
+        // Anti-sequestro: re-vincular para OUTRA conta exige o segredo correto —
+        // inclusive quando o dispositivo ainda não tem segredo gravado.
+        if (existing.user_id !== user.id && !secretsMatch(providedSecret, existing.device_secret)) {
           return res.status(403).json({ success: false, message: 'Dispositivo já vinculado a outra conta' });
         }
         const secret = existing.device_secret || generateDeviceSecret();
@@ -784,36 +878,55 @@ app.post('/api/pets', authMiddleware, (req, res) => {
 // Atualizar pet
 app.put('/api/pets/:id', authMiddleware, (req, res) => {
   const petId = req.params.id;
-  const { name, type, deviceId, compartment, dailyAmount } = req.body;
+  const { name, type, deviceId, compartment, dailyAmount } = req.body || {};
 
-  const updates = [];
-  const values = [];
+  const applyUpdate = () => {
+    const updates = [];
+    const values = [];
 
-  if (name) { updates.push('name = ?'); values.push(name); }
-  if (type) { updates.push('type = ?'); values.push(type); }
-  if (deviceId) { updates.push('device_id = ?'); values.push(deviceId); }
-  if (compartment !== undefined) { updates.push('compartment = ?'); values.push(compartment); }
-  if (dailyAmount) { updates.push('daily_amount = ?'); values.push(dailyAmount); }
+    if (name) { updates.push('name = ?'); values.push(name); }
+    if (type) { updates.push('type = ?'); values.push(type); }
+    if (deviceId) { updates.push('device_id = ?'); values.push(deviceId); }
+    if (compartment !== undefined) { updates.push('compartment = ?'); values.push(compartment); }
+    if (dailyAmount) { updates.push('daily_amount = ?'); values.push(dailyAmount); }
 
-  if (updates.length === 0) {
-    return res.status(400).json({ success: false, message: 'Nenhum dado para atualizar' });
+    if (updates.length === 0) {
+      return res.status(400).json({ success: false, message: 'Nenhum dado para atualizar' });
+    }
+
+    values.push(petId, req.userId);
+
+    db.run(
+      `UPDATE pets SET ${updates.join(', ')} WHERE id = ? AND user_id = ?`,
+      values,
+      function(err) {
+        if (err) {
+          return res.status(500).json({ success: false, message: 'Erro ao atualizar pet' });
+        }
+        if (this.changes === 0) {
+          return res.status(404).json({ success: false, message: 'Pet não encontrado' });
+        }
+        res.json({ success: true, message: 'Pet atualizado' });
+      }
+    );
+  };
+
+  // Se o cliente mandou deviceId, confirmar que o dispositivo é DESTE usuário.
+  // Sem isso era possível apontar o pet para o alimentador de outra conta e,
+  // via POST /api/feed/now, acionar o aparelho alheio.
+  if (deviceId) {
+    return db.get(
+      'SELECT id FROM devices WHERE id = ? AND user_id = ?',
+      [deviceId, req.userId],
+      (err, device) => {
+        if (err) return res.status(500).json({ success: false, message: 'Erro interno' });
+        if (!device) return res.status(404).json({ success: false, message: 'Dispositivo não encontrado' });
+        applyUpdate();
+      }
+    );
   }
 
-  values.push(petId, req.userId);
-
-  db.run(
-    `UPDATE pets SET ${updates.join(', ')} WHERE id = ? AND user_id = ?`,
-    values,
-    function(err) {
-      if (err) {
-        return res.status(500).json({ success: false, message: 'Erro ao atualizar pet' });
-      }
-      if (this.changes === 0) {
-        return res.status(404).json({ success: false, message: 'Pet não encontrado' });
-      }
-      res.json({ success: true, message: 'Pet atualizado' });
-    }
-  );
+  applyUpdate();
 });
 
 // Excluir pet
@@ -989,9 +1102,17 @@ app.get('/api/schedules', authMiddleware, (req, res) => {
         return res.status(500).json({ success: false, message: 'Erro ao buscar horários' });
       }
 
-      // Converter days de string JSON para propriedades individuais
+      // Converter days de string JSON para propriedades individuais.
+      // O parse é protegido: um valor corrompido na coluna não pode derrubar
+      // o processo (era exceção não capturada dentro do callback).
       const schedulesFormatted = (schedules || []).map(s => {
-        const days = JSON.parse(s.days || '{}');
+        let days = {};
+        try {
+          const parsed = JSON.parse(s.days || '{}');
+          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) days = parsed;
+        } catch (e) {
+          console.warn(`[SCHEDULES] days inválido no horário ${s.id}, tratando como vazio`);
+        }
         return {
           ...s,
           monday: days.monday || false,
@@ -1011,10 +1132,21 @@ app.get('/api/schedules', authMiddleware, (req, res) => {
 
 // Criar horário
 app.post('/api/schedules', authMiddleware, (req, res) => {
-  const { petId, deviceId, hour, minute, amount, days } = req.body;
+  const { petId, hour, minute, amount } = req.body || {};
+  const days = normalizeDays(req.body);
 
-  if (petId === undefined || deviceId === undefined || hour === undefined || minute === undefined || !amount || !days) {
-    return res.status(400).json({ success: false, error: 'Dados incompletos' });
+  if (petId === undefined) {
+    return res.status(400).json({ success: false, error: 'petId obrigatório' });
+  }
+  if (!isInt(hour, 0, 23) || !isInt(minute, 0, 59)) {
+    return res.status(400).json({ success: false, error: 'Horário inválido (hora 0-23, minuto 0-59)' });
+  }
+  const amountNum = Number(amount);
+  if (!Number.isFinite(amountNum) || amountNum <= 0 || amountNum > 2000) {
+    return res.status(400).json({ success: false, error: 'Quantidade inválida (1-2000 g)' });
+  }
+  if (!days) {
+    return res.status(400).json({ success: false, error: 'Selecione ao menos um dia da semana' });
   }
 
   // Verificar se pet pertence ao usuário
@@ -1025,6 +1157,10 @@ app.post('/api/schedules', authMiddleware, (req, res) => {
       if (err || !pet) {
         return res.status(404).json({ success: false, error: 'Pet não encontrado' });
       }
+
+      // O dispositivo é SEMPRE derivado do pet já validado — aceitar deviceId do
+      // corpo permitia criar horário apontando para o alimentador de outra conta.
+      const deviceId = pet.device_id;
 
       // Verificar se já existe horário duplicado para este pet
       db.get(
@@ -1044,7 +1180,7 @@ app.post('/api/schedules', authMiddleware, (req, res) => {
 
           db.run(
             'INSERT INTO schedules (pet_id, device_id, hour, minute, amount, days) VALUES (?, ?, ?, ?, ?, ?)',
-            [petId, deviceId, hour, minute, amount, JSON.stringify(days)],
+            [petId, deviceId, hour, minute, amountNum, JSON.stringify(days)],
             function(err) {
               if (err) {
                 console.error('[SCHEDULES] Erro ao criar:', err);
@@ -1071,7 +1207,7 @@ app.post('/api/schedules', authMiddleware, (req, res) => {
                   device_id: deviceId,
                   hour,
                   minute,
-                  amount,
+                  amount: amountNum,
                   days,
                   active: true
                 }
@@ -1087,7 +1223,7 @@ app.post('/api/schedules', authMiddleware, (req, res) => {
 // Atualizar horário
 app.put('/api/schedules/:id', authMiddleware, (req, res) => {
   const scheduleId = req.params.id;
-  const { hour, minute, amount, days, active } = req.body;
+  const { hour, minute, amount, active } = req.body || {};
 
   // Verificar se horário pertence ao usuário
   db.get(
@@ -1103,10 +1239,32 @@ app.put('/api/schedules/:id', authMiddleware, (req, res) => {
       const updates = [];
       const values = [];
 
-      if (hour !== undefined) { updates.push('hour = ?'); values.push(hour); }
-      if (minute !== undefined) { updates.push('minute = ?'); values.push(minute); }
-      if (amount !== undefined) { updates.push('amount = ?'); values.push(amount); }
-      if (days !== undefined) { updates.push('days = ?'); values.push(days); }
+      if (hour !== undefined) {
+        if (!isInt(hour, 0, 23)) {
+          return res.status(400).json({ success: false, error: 'Hora inválida (0-23)' });
+        }
+        updates.push('hour = ?'); values.push(hour);
+      }
+      if (minute !== undefined) {
+        if (!isInt(minute, 0, 59)) {
+          return res.status(400).json({ success: false, error: 'Minuto inválido (0-59)' });
+        }
+        updates.push('minute = ?'); values.push(minute);
+      }
+      if (amount !== undefined) {
+        const amountNum = Number(amount);
+        if (!Number.isFinite(amountNum) || amountNum <= 0 || amountNum > 2000) {
+          return res.status(400).json({ success: false, error: 'Quantidade inválida (1-2000 g)' });
+        }
+        updates.push('amount = ?'); values.push(amountNum);
+      }
+      // Aceita tanto { days: {...} } quanto os booleanos soltos monday..sunday
+      // (formato do modal de edição, que antes era silenciosamente ignorado).
+      // Grava SEMPRE como JSON — antes gravava o valor cru e corrompia a coluna.
+      const normalizedDays = normalizeDays(req.body);
+      if (normalizedDays) {
+        updates.push('days = ?'); values.push(JSON.stringify(normalizedDays));
+      }
       if (active !== undefined) { updates.push('active = ?'); values.push(active ? 1 : 0); }
 
       if (updates.length === 0) {
@@ -1346,39 +1504,49 @@ app.post('/api/feed/log', deviceAuth((r) => r.body.device_id), (req, res) => {
 
   console.log(`🍽️ Alimentação registrada: ${device_id} - ${size} - pet: ${pet_name || 'N/A'}`);
 
-  // Buscar dispositivo primeiro
+  // Buscar dispositivo primeiro.
+  // IMPORTANTE: o firmware decide pelo código HTTP se apaga a alimentação da
+  // fila offline. Qualquer falha precisa devolver 4xx/5xx — responder 200
+  // fazia o ESP32 descartar registros que nunca foram gravados.
   db.get('SELECT id, user_id FROM devices WHERE device_id = ?', [device_id], (err, device) => {
-    if (err || !device) {
+    if (err) {
+      console.error('[FEED/LOG] Erro ao buscar dispositivo:', err.message);
+      return res.status(500).json({ success: false, message: 'Erro interno' });
+    }
+    if (!device) {
       console.log(`⚠️ Dispositivo ${device_id} não encontrado`);
-      return res.json({ success: false, message: 'Dispositivo não encontrado' });
+      return res.status(404).json({ success: false, message: 'Dispositivo não encontrado' });
     }
 
     // Calcular gramas baseado no size
     const amounts = { small: 50, medium: 100, large: 150 };
     const amount = amounts[size] || 100;
 
-    // Buscar pet pelo nome (enviado pelo ESP32) ou pelo device_id
-    let petQuery;
-    let petParams;
+    // Resolve o pet: primeiro pelo nome enviado pelo ESP32 e, se não achar
+    // (caso comum: o pet foi renomeado no site), cai para o pet do dispositivo.
+    const resolvePet = (cb) => {
+      if (pet_name) {
+        return db.get(
+          'SELECT id, name FROM pets WHERE name = ? AND user_id = ?',
+          [pet_name, device.user_id],
+          (e, byName) => {
+            if (!e && byName) return cb(byName);
+            db.get('SELECT id, name FROM pets WHERE device_id = ?', [device.id], (e2, byDevice) => cb(byDevice || null));
+          }
+        );
+      }
+      db.get('SELECT id, name FROM pets WHERE device_id = ?', [device.id], (e, byDevice) => cb(byDevice || null));
+    };
 
-    if (pet_name) {
-      // ESP32 enviou o nome do pet - buscar por nome e user_id
-      petQuery = 'SELECT id, name FROM pets WHERE name = ? AND user_id = ?';
-      petParams = [pet_name, device.user_id];
-    } else {
-      // Fallback: buscar pet vinculado ao device
-      petQuery = 'SELECT id, name FROM pets WHERE device_id = ?';
-      petParams = [device.id];
-    }
-
-    db.get(petQuery, petParams, (err, pet) => {
-      if (err || !pet) {
-        console.log(`⚠️ Pet não encontrado para ${device_id}. Query: ${petQuery}, Params: ${petParams}`);
-        // Ainda retorna sucesso, mas não registra no histórico
-        return res.json({ success: true, message: 'Pet não encontrado, histórico não registrado' });
+    resolvePet((pet) => {
+      if (!pet) {
+        // Não há pet cadastrado neste dispositivo: não existe onde registrar.
+        // Responde 200 de propósito para o ESP32 não reter isso na fila para sempre.
+        console.log(`⚠️ Nenhum pet cadastrado para ${device_id} — alimentação não registrada`);
+        return res.json({ success: true, message: 'Nenhum pet cadastrado neste dispositivo' });
       }
 
-      console.log(`✅ Pet encontrado: ${pet.name} (id: ${pet.id})`);
+      console.log(`✅ Pet resolvido: ${pet.name} (id: ${pet.id})`);
 
       // Registrar no histórico (usa timestamp offline se fornecido)
       // Se offline: scheduled vira scheduled_offline, outros triggers mantém o valor original
@@ -1388,30 +1556,33 @@ app.post('/api/feed/log', deviceAuth((r) => r.body.device_id), (req, res) => {
       } else {
         triggerType = trigger || 'remote';
       }
+      // A resposta só sai DEPOIS do INSERT: antes o 200 era enviado fora do
+      // callback, então uma falha de gravação virava "salvo" para o ESP32.
       db.run(
         'INSERT INTO feeding_history (pet_id, device_id, amount, trigger_type, created_at) VALUES (?, ?, ?, ?, ?)',
         [pet.id, device.id, amount, triggerType, timestamp],
         function(err) {
           if (err) {
-            console.log(`❌ Erro ao salvar histórico: ${err.message}`);
-          } else {
-            console.log(`📝 Histórico salvo: pet_id=${pet.id}, amount=${amount}g, trigger=${trigger}`);
+            console.error(`❌ Erro ao salvar histórico: ${err.message}`);
+            return res.status(500).json({ success: false, message: 'Erro ao registrar alimentação' });
           }
+
+          console.log(`📝 Histórico salvo: pet_id=${pet.id}, amount=${amount}g, trigger=${triggerType}`);
+
+          // Notificar via WebSocket
+          sendToUser(device.user_id, {
+            type: 'feeding_complete',
+            data: {
+              pet_name: pet.name,
+              amount,
+              size,
+              timestamp: new Date().toISOString()
+            }
+          });
+
+          res.json({ success: true });
         }
       );
-
-      // Notificar via WebSocket
-      sendToUser(device.user_id, {
-        type: 'feeding_complete',
-        data: {
-          pet_name: pet.name,
-          amount,
-          size,
-          timestamp: new Date().toISOString()
-        }
-      });
-
-      res.json({ success: true });
     });
   });
 });
@@ -1451,13 +1622,22 @@ app.post('/api/devices/:deviceId/feed', authMiddleware, (req, res) => {
 // Obter status de dispositivo
 app.get('/api/devices/:deviceId/status', authMiddleware, (req, res) => {
   const deviceId = req.params.deviceId;
-  const status = deviceStatus.get(deviceId);
 
-  if (!status) {
-    return res.json({ success: true, data: { online: false, food_level: null, message: 'Dispositivo nunca conectou' } });
-  }
+  // Confirmar que o dispositivo é deste usuário antes de expor o status
+  db.get(
+    'SELECT device_id FROM devices WHERE device_id = ? AND user_id = ?',
+    [deviceId, req.userId],
+    (err, device) => {
+      if (err) return res.status(500).json({ success: false, message: 'Erro interno' });
+      if (!device) return res.status(404).json({ success: false, message: 'Dispositivo não encontrado' });
 
-  res.json({ success: true, data: status });
+      const status = deviceStatus.get(deviceId);
+      if (!status) {
+        return res.json({ success: true, data: { online: false, food_level: null, message: 'Dispositivo nunca conectou' } });
+      }
+      res.json({ success: true, data: status });
+    }
+  );
 });
 
 // Solicitar leitura de nível do sensor (envia comando para ESP32)
@@ -1499,22 +1679,32 @@ app.get('/api/devices/:deviceId/schedules', deviceAuth((r) => r.params.deviceId)
 
   // Buscar dispositivo (incluindo power_save)
   db.get('SELECT id, user_id, power_save FROM devices WHERE device_id = ?', [deviceId], (err, device) => {
-    if (err || !device) {
-      return res.json({ success: true, data: [], power_save: false });
+    // NUNCA responder 200 com lista vazia em caso de erro: o firmware trata
+    // "success + data vazio" como "o usuário não tem horários" e APAGA os
+    // horários gravados na flash. Erro tem que ser erro.
+    if (err) {
+      console.error('[SCHEDULES/ESP32] Erro ao buscar dispositivo:', err.message);
+      return res.status(500).json({ success: false, error: 'Erro ao buscar dispositivo' });
+    }
+    if (!device) {
+      return res.status(404).json({ success: false, error: 'Dispositivo não encontrado' });
     }
 
-    // Buscar horários do usuário dono do dispositivo
-    // IMPORTANTE: ORDER BY garante ordem consistente para o bitmask executedToday do ESP32
+    // Horários DESTE dispositivo (via o pet vinculado a ele).
+    // Antes filtrava só por dono: com dois alimentadores, cada um recebia os
+    // horários de todos — o pet errado comia e o certo recebia dose dupla.
+    // ORDER BY garante ordem estável para os logs do ESP32.
     db.all(
-      `SELECT s.hour, s.minute, s.amount, s.days, s.active, p.name as pet_name
+      `SELECT s.id, s.hour, s.minute, s.amount, s.days, s.active, p.name as pet_name
        FROM schedules s
        JOIN pets p ON s.pet_id = p.id
-       WHERE p.user_id = ? AND s.active = 1
-       ORDER BY s.hour, s.minute`,
-      [device.user_id],
+       WHERE p.user_id = ? AND p.device_id = ? AND s.active = 1
+       ORDER BY s.hour, s.minute, s.id`,
+      [device.user_id, device.id],
       (err, schedules) => {
         if (err) {
-          return res.json({ success: true, data: [] });
+          console.error('[SCHEDULES/ESP32] Erro ao buscar horários:', err.message);
+          return res.status(500).json({ success: false, error: 'Erro ao buscar horários' });
         }
 
         // Formatar para o ESP32
@@ -1551,6 +1741,9 @@ app.get('/api/devices/:deviceId/schedules', deviceAuth((r) => r.params.deviceId)
           }
 
           return {
+            // id estável: o firmware usa como chave da trava anti-reexecução,
+            // para que dois pets no mesmo horário não se anulem.
+            id: s.id,
             hour: s.hour,
             minute: s.minute,
             size: size,
@@ -1605,6 +1798,18 @@ app.get('*', (req, res) => {
 });
 
 // ========================================
+// TRATAMENTO DE ERRO
+// ========================================
+
+// Middleware de erro do Express: qualquer exceção lançada em um handler cai
+// aqui em vez de derrubar a requisição sem resposta.
+app.use((err, req, res, next) => {
+  console.error('[ERRO]', req.method, req.path, '-', err && err.message);
+  if (res.headersSent) return next(err);
+  res.status(500).json({ success: false, error: 'Erro interno do servidor' });
+});
+
+// ========================================
 // INICIALIZAÇÃO
 // ========================================
 
@@ -1620,24 +1825,46 @@ server.listen(PORT, () => {
   console.log('✅ Servidor pronto!\n');
 });
 
-// Graceful shutdown
-process.on('SIGINT', () => {
-  console.log('\n\n🛑 Encerrando servidor...');
+// Uma exceção/rejeição não tratada dentro de um callback do sqlite3 encerrava
+// o processo silenciosamente — e cada queda apagava a fila de comandos, que só
+// existe em memória. Aqui o erro é registrado e o encerramento é controlado.
+process.on('uncaughtException', (err) => {
+  console.error('❌ uncaughtException:', err && err.stack ? err.stack : err);
+  shutdown('uncaughtException', 1);
+});
+
+process.on('unhandledRejection', (reason) => {
+  console.error('❌ unhandledRejection:', reason);
+});
+
+// Graceful shutdown — trata SIGTERM (o que o Docker envia) além de SIGINT.
+// Fecha os clientes WebSocket explicitamente: sem isso wss.close() nunca
+// completa enquanto houver um dashboard aberto e o processo trava até o SIGKILL.
+let shuttingDown = false;
+function shutdown(signal, exitCode = 0) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`\n🛑 Encerrando servidor (${signal})...`);
+
+  const forceExit = setTimeout(() => {
+    console.warn('⚠️  Encerramento forçado (timeout)');
+    process.exit(exitCode);
+  }, 8000);
+  forceExit.unref();
+
+  server.close(() => console.log('✅ HTTP Server fechado'));
+
+  wss.clients.forEach((client) => {
+    try { client.close(1001, 'Servidor encerrando'); } catch (e) { /* ignora */ }
+  });
+  wss.close(() => console.log('✅ WebSocket fechado'));
 
   db.close((err) => {
-    if (err) {
-      console.error('Erro ao fechar banco:', err);
-    } else {
-      console.log('✅ Banco fechado');
-    }
+    if (err) console.error('Erro ao fechar banco:', err.message);
+    else console.log('✅ Banco fechado');
+    clearTimeout(forceExit);
+    process.exit(exitCode);
   });
+}
 
-  wss.close(() => {
-    console.log('✅ WebSocket fechado');
-  });
-
-  server.close(() => {
-    console.log('✅ HTTP Server fechado');
-    process.exit(0);
-  });
-});
+['SIGTERM', 'SIGINT'].forEach((sig) => process.on(sig, () => shutdown(sig, 0)));
